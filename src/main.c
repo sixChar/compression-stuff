@@ -4,8 +4,13 @@
 #include <string.h>
 #include "util.h"
 
+// Crash on failed assert
+#define ASSERT(expr) if (!(expr)) {*(int*)0=0;}
+
 /*
  *  Relative encoding
+ *  
+ *  NOTE: Does not work with stdin
  */
 void comp_relative(FILE *infp, FILE *outfp) {
     int curr, last;
@@ -26,11 +31,26 @@ void comp_relative(FILE *infp, FILE *outfp) {
             max = diff;
         }
     }
-    // Is 230 and therefore not worth continuing since it will require the same
-    // number of bits to encode.
-    printf("Diff: %d\n", max - min);
+
+    if ((max - min) > 128) {
+        rewind(infp);
+        fputc(0x00, outfp);
+        while ((curr = fgetc(infp)) != EOF) {
+            fputc((char) curr, outfp);
+        }
+        return;
+    } else {
+        ASSERT(0);
+    }
+    
 }
-void decomp_relative(FILE *infp, FILE *outfp) {}
+void decomp_relative(FILE *infp, FILE *outfp) {
+    int curr = fgetc(infp);
+    ASSERT(curr == 0x00);
+    while ((curr = fgetc(infp)) != EOF) {
+        fputc(curr, outfp);
+    }
+}
 
 
 
@@ -113,23 +133,56 @@ int main(int argc, char* argv[]) {
     FILE *outfp;
     void (*compress)(FILE *, FILE *) = comp_relative;
     void (*decompress)(FILE *, FILE *) = decomp_relative;
-    if (argc == 1 || *argv[1] == 'c') {
-        infp = fopen("enwik9-sm", "rb"); 
-        outfp = fopen("enwik9-sm-comp", "wb");
+    char *baseFile = "enwik9-sm";
+    char fname[1024];
+    if (argc == 2 && *argv[1] == 'c') {
+        printf("Compressing...\n");
+
+        strcpy(fname, baseFile);
+        printf("In file: %s\n", fname);
+        infp = fopen(fname, "rb"); 
+
+        strcat(fname, "-comp");
+        printf("Out file: %s\n", fname);
+        outfp = fopen(fname, "wb");
+
+        ASSERT(infp != NULL && outfp != NULL);
 
         compress(infp, outfp);
+        printf("Done.\n");
     }
-    else if (*argv[1] == 'd') {
-        infp = fopen("enwik9-sm-comp", "rb");
-        outfp = fopen("enwik9-sm-decomp", "wb");
+    else if (argc == 2 && *argv[1] == 'd') {
+        printf("Decompressing...\n");
+
+        strcpy(fname, baseFile);
+        strcat(fname, "-comp");
+        printf("In file: %s\n", fname);
+        infp = fopen(fname, "rb");
+
+        strcpy(fname, baseFile);
+        strcat(fname, "-decomp");
+        printf("Out file: %s\n", fname);
+        outfp = fopen(fname, "wb");
+
+        ASSERT(infp != NULL && outfp != NULL);
 
         decompress(infp, outfp);
+        printf("Done.\n");
     }
     else {
-        infp = fopen("enwik9-sm", "rb");
-        outfp = fopen("enwik9-sm-decomp", "rb");
-        int i;
+        printf("Comparing...\n");
 
+        strcpy(fname, baseFile);
+        infp = fopen(fname, "rb");
+        printf("f1: %s\n", fname);
+
+        strcat(fname, "-decomp");
+        outfp = fopen(fname, "rb");
+        printf("f2: %s\n", fname);
+
+        ASSERT(infp != NULL && outfp != NULL);
+
+        int i;
         if ((i = diff_file(infp, outfp))) {
             printf("Different at %d\n", i);
         }
