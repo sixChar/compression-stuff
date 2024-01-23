@@ -56,7 +56,8 @@ void decomp_relative(FILE *infp, FILE *outfp) {
 
 /*
     Basic run length encoding.
-    Ratio: 99.48754
+    Enwik9-sm Ratio: 99.48754 %
+    Image Ratio: 106.88208 % (Using 0 as escape is no good)
 */
 void comp_rle(FILE *infp, FILE *outfp) {
     int curr, last;
@@ -68,17 +69,23 @@ void comp_rle(FILE *infp, FILE *outfp) {
     while ((curr = fgetc(infp)) != EOF) {
         // If char changes or count will overflow
         if (curr != last || count == 0xFF) {
-            if (count == 1) {
+            if (last != 0x00 && count == 1) {
                 fputc((char) last, outfp);
             }
-            else if (count == 2) {
+            else if (count == 1) {
+                // Put two copies to escape a single escape
+                fputc((char) 0x00, outfp);
+                fputc((char) 0x00, outfp);
+            }
+            else if (last != 0x00 && count == 2) {
+                // Don't run length encode 2 bytes unless it's 2 escape chars
                 fputc((char) last, outfp);
                 fputc((char) last, outfp);
                 count = 1;
             }
             else {
-                // Put escape char then count then char
-                fputc((char) 0x0, outfp);
+                // Put escape char, then count, then char
+                fputc((char) 0x00, outfp);
                 fputc((char) count, outfp);
                 fputc((char) last, outfp);
                 count = 1; // reset count
@@ -91,19 +98,21 @@ void comp_rle(FILE *infp, FILE *outfp) {
     }
 
     // Print last character
-    if (count == 1) {
+    if (last != 0x00 && count == 1) {
         fputc((char) last, outfp);
+    } else if (count == 1) {
+        fputc((char) 0x00, outfp);
+        fputc((char) 0x00, outfp);
     }
-    else if (count == 2) {
+    else if (last != 0x00 && count == 2) {
         fputc((char) last, outfp);
         fputc((char) last, outfp);
     }
     else {
         // Place length of encoding followed by char
-        fputc((char) 0x0, outfp);
+        fputc((char) 0x00, outfp);
         fputc((char) count, outfp);
         fputc((char) last, outfp);
-        count = 1; // reset count
     }
     
 }
@@ -114,11 +123,16 @@ void decomp_rle(FILE *infp, FILE *outfp) {
     unsigned int count, i;
     while ((count = fgetc(infp)) != EOF) {
         // Only one character
-        if (count == 0) {
+        if (count == 0x00) {
             count = fgetc(infp);
-            ch = fgetc(infp); // Char to write
-            for (i=0; i < count; i++) {
-                fputc(ch, outfp);
+            if (count == 0x00) {
+                fputc(0x00, outfp);
+            }
+            else {
+                ch = fgetc(infp); // Char to write
+                for (i=0; i < count; i++) {
+                    fputc(ch, outfp);
+                }
             }
         }
         else {
@@ -131,9 +145,9 @@ void decomp_rle(FILE *infp, FILE *outfp) {
 int main(int argc, char* argv[]) {
     FILE *infp; 
     FILE *outfp;
-    void (*compress)(FILE *, FILE *) = comp_relative;
-    void (*decompress)(FILE *, FILE *) = decomp_relative;
-    char *baseFile = "enwik9-sm";
+    void (*compress)(FILE *, FILE *) = comp_rle;
+    void (*decompress)(FILE *, FILE *) = decomp_rle;
+    char *baseFile = "image.bmp";
     char fname[1024];
     if (argc == 2 && *argv[1] == 'c') {
         printf("Compressing...\n");
