@@ -55,91 +55,113 @@ void decomp_relative(FILE *infp, FILE *outfp) {
 
 
 /*
-    Basic run length encoding.
-    Enwik9-sm Ratio: 99.48754 %
-    Image Ratio: 106.88208 % (Using 0 as escape is no good)
-*/
+ * Simple run length encoding (that can handle 0 byte):
+ *
+ * Scores:
+ * ==========================
+ * enwik9-sm        99.85252%
+ * image.bmp        99.91225%
+ *
+ * Note: Previously used 0 as a padding byte but this lead to pretty bad
+ * expansion in image file. However the perfrmance was better on enwik9-sm.
+ * This is because there are no 0 bytes in that file. This version handles
+ * 0s more gracefully.
+ */
 void comp_rle(FILE *infp, FILE *outfp) {
     int curr, last;
     int count = 1;
     last = fgetc(infp);
-    // File is empty
-    if (last == EOF)
+    if (last == EOF) {
         return;
+    }
     while ((curr = fgetc(infp)) != EOF) {
-        // If char changes or count will overflow
-        if (curr != last || count == 0xFF) {
-            if (last != 0x00 && count == 1) {
+        if (curr != last || count == 0xff + 3) {
+            if (count < 3) {
                 fputc((char) last, outfp);
-            }
-            else if (count == 1) {
-                // Put two copies to escape a single escape
-                fputc((char) 0x00, outfp);
-                fputc((char) 0x00, outfp);
-            }
-            else if (last != 0x00 && count == 2) {
-                // Don't run length encode 2 bytes unless it's 2 escape chars
+                if (count == 2) {
+                    fputc((char) last, outfp);
+                }
+            } else {
                 fputc((char) last, outfp);
                 fputc((char) last, outfp);
-                count = 1;
-            }
-            else {
-                // Put escape char, then count, then char
-                fputc((char) 0x00, outfp);
-                fputc((char) count, outfp);
                 fputc((char) last, outfp);
-                count = 1; // reset count
+                // n more repeats
+                fputc((char) count - 3, outfp);
             }
-        }
-        else {
+            count = 1;
+        } else {
             count++;
         }
         last = curr;
     }
 
-    // Print last character
-    if (last != 0x00 && count == 1) {
+    // Handle last char
+    if (count < 3) {
         fputc((char) last, outfp);
-    } else if (count == 1) {
-        fputc((char) 0x00, outfp);
-        fputc((char) 0x00, outfp);
+        if (count == 2) {
+            fputc((char) last, outfp);
+        }
+    } else {
+        fputc((char) last, outfp);
+        fputc((char) last, outfp);
+        fputc((char) last, outfp);
+        // n more repeats
+        fputc((char) count - 3, outfp);
     }
-    else if (last != 0x00 && count == 2) {
-        fputc((char) last, outfp);
-        fputc((char) last, outfp);
-    }
-    else {
-        // Place length of encoding followed by char
-        fputc((char) 0x00, outfp);
-        fputc((char) count, outfp);
-        fputc((char) last, outfp);
-    }
-    
 }
 
 
 void decomp_rle(FILE *infp, FILE *outfp) {
-    int ch;
-    unsigned int count, i;
-    while ((count = fgetc(infp)) != EOF) {
-        // Only one character
-        if (count == 0x00) {
-            count = fgetc(infp);
-            if (count == 0x00) {
-                fputc(0x00, outfp);
+    int curr, last;
+    int count=1;
+    last = fgetc(infp);
+    // empty file
+    if (last == EOF) {
+        return;
+    }
+    while ((curr = fgetc(infp)) != EOF) {
+        if (count == 3) {
+            fputc((char) last, outfp);
+            fputc((char) last, outfp);
+            fputc((char) last, outfp);
+            for (int i=0; i < curr; i++) {
+                fputc((char) last, outfp);
             }
-            else {
-                ch = fgetc(infp); // Char to write
-                for (i=0; i < count; i++) {
-                    fputc(ch, outfp);
-                }
+
+            last = fgetc(infp);
+            count = 1;
+            if (last == EOF) {
+                break;
             }
+        } else if (last != curr) {
+            fputc((char) last, outfp);
+            if (count >= 2) {
+                fputc((char) last, outfp);
+            }
+            count = 1;
+            last = curr;
+                
+        } else {
+            count++;
+            last = curr;
         }
-        else {
-            fputc(count, outfp);
+        
+    } 
+
+    // Check last symbol
+    if (last != EOF) {
+        fputc((char) last, outfp);
+        if (count >= 2) {
+            fputc((char) last, outfp);
         }
+        // For a properly formatted compressed file, we should never get to the end
+        // of the character stream with a count of 3. This would need to be followed
+        // by the number of extra characters even if that number is 0. The loop would
+        // have caught this.
+        ASSERT(count < 3);
     }
 }
+
 
 
 int main(int argc, char* argv[]) {
@@ -147,7 +169,7 @@ int main(int argc, char* argv[]) {
     FILE *outfp;
     void (*compress)(FILE *, FILE *) = comp_rle;
     void (*decompress)(FILE *, FILE *) = decomp_rle;
-    char *baseFile = "image.bmp";
+    char *baseFile = "enwik9-sm";
     char fname[1024];
     if (argc == 2 && *argv[1] == 'c') {
         printf("Compressing...\n");
