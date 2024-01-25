@@ -7,6 +7,8 @@
 // Crash on failed assert
 #define ASSERT(expr) if (!(expr)) {*(int*)0=0;}
 
+typedef void (*TformPtr)(FILE*, FILE*);
+
 /*
  *  Relative encoding
  *  
@@ -57,10 +59,10 @@ void decomp_relative(FILE *infp, FILE *outfp) {
 /*
  * Simple run length encoding (that can handle 0 byte):
  *
- * Scores:
+ * Compression Ratios:
  * ==========================
- * enwik9-sm        99.85252%
- * image.bmp        99.91225%
+ * enwik9-sm        1.00148
+ * image.bmp        1.00088
  *
  * Note: Previously used 0 as a padding byte but this lead to pretty bad
  * expansion in image file. However the perfrmance was better on enwik9-sm.
@@ -164,12 +166,80 @@ void decomp_rle(FILE *infp, FILE *outfp) {
 
 
 
+void testCompression(char *baseFile, TformPtr compress, TformPtr decompress) {
+    FILE *infp;
+    FILE *outfp;
+
+    char fname[1024];
+
+    long int baseBytes;
+    long int compBytes;
+    
+    // Compress file
+    printf("Compressing file...\n");
+    // set fname to "base.file"
+    strcpy(fname, baseFile);
+    infp = fopen(fname, "rb");
+
+    // set fname to "base.file-comp"
+    strcat(fname, "-comp");
+    outfp = fopen(fname, "wb");
+
+    compress(infp, outfp);
+
+    // Make sure at end of files and count bytes
+    fseek(infp, 0, SEEK_END);
+    fseek(outfp, 0, SEEK_END);
+    baseBytes = ftell(infp);
+    compBytes = ftell(outfp);
+
+    fclose(outfp);
+    fclose(infp);
+
+    // Decompress file
+    printf("Decompressing file...\n");
+    // fname is still "base.file-comp"
+    infp = fopen(fname, "rb");
+    
+    // set fname to "base.file-decomp"
+    strcpy(fname, baseFile);
+    strcat(fname, "-decomp");
+    outfp = fopen(fname, "wb");
+
+    decompress(infp, outfp);
+
+    fclose(infp);
+    fclose(outfp);
+
+    // Test correctness
+    printf("Checking for differences between base and decompressed...\n");
+    // fname is still "base.file-decomp"
+    outfp = fopen(fname, "rb");
+    
+    // set fname to "base.file"
+    strcpy(fname, baseFile);
+    infp = fopen(fname, "rb");
+
+    int i;
+    if ((i = diff_file(infp, outfp))) {
+        printf("ERROR: Files different at %d\n", i);
+    }
+    else {
+        printf("Same!\n");
+        printf("Compression ratio: %.5Lf\n", (long double) baseBytes / (long double) compBytes);
+    }
+
+    fclose(infp);
+    fclose(outfp);
+}
+
+
 int main(int argc, char* argv[]) {
     FILE *infp; 
     FILE *outfp;
-    void (*compress)(FILE *, FILE *) = comp_rle;
-    void (*decompress)(FILE *, FILE *) = decomp_rle;
-    char *baseFile = "enwik9-sm";
+    TformPtr compress = comp_rle;
+    TformPtr decompress = decomp_rle;
+    char *baseFile = "image.bmp";
     char fname[1024];
     if (argc == 2 && *argv[1] == 'c') {
         printf("Compressing...\n");
@@ -186,6 +256,9 @@ int main(int argc, char* argv[]) {
 
         compress(infp, outfp);
         printf("Done.\n");
+
+        fclose(infp);
+        fclose(outfp);
     }
     else if (argc == 2 && *argv[1] == 'd') {
         printf("Decompressing...\n");
@@ -204,8 +277,11 @@ int main(int argc, char* argv[]) {
 
         decompress(infp, outfp);
         printf("Done.\n");
+
+        fclose(infp);
+        fclose(outfp);
     }
-    else {
+    else if (argc == 2 && *argv[1] == 't') {
         printf("Comparing...\n");
 
         strcpy(fname, baseFile);
@@ -225,9 +301,15 @@ int main(int argc, char* argv[]) {
         else {
             printf("Same!\n");
         }
+
+        fclose(infp);
+        fclose(outfp);
     }
-    fclose(infp);
-    fclose(outfp);
+    else {
+        printf("Testing file %s:\n", baseFile);
+        testCompression(baseFile, compress, decompress);
+    }
+
     
     return (0);
 }
