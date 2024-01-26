@@ -5,9 +5,104 @@
 #include "util.h"
 
 // Crash on failed assert
-#define ASSERT(expr) if (!(expr)) {*(int*)0=0;}
+#define GET_MACRO(_1, _2, NAME,...) NAME
+
+#define ASSERT1(expr) if (!(expr)) {*(int*)0=0;}
+#define ASSERT2(expr, msg) if (!(expr)) {fprintf(stderr, msg); *(int*)0=0;}
+#define ASSERT(...) GET_MACRO(__VA_ARGS__, ASSERT2, ASSERT1)(__VA_ARGS__)
 
 typedef void (*TformPtr)(FILE*, FILE*);
+
+
+typedef struct BMPFileHeader {
+    int size;
+    int imgOffset;
+    int headSize;
+    int width;
+    int height;
+    int bitsPerPixel;
+} BMPFileHeader;
+
+int readLittleEndian(FILE *fp, int offset, int nBytes) {
+    ASSERT(nBytes <= 4, "Error: readLittleEndian only designed to read max 32 bit ints\n");
+    int err = fseek(fp, offset, SEEK_SET);
+    ASSERT(err==0, "Error reading file in readLittleEndian!");
+    int res = 0;
+    for (int i=0; i < nBytes; i++) {
+        int c = getc(fp);
+        ASSERT(c != EOF, "Error in readLittleEndian: End of file reached!\n");
+        res |= (c << (8*i));
+    }
+    return res;
+    
+}
+
+void readBMPHeader(FILE *fp, BMPFileHeader *h) {
+    h->size = readLittleEndian(fp, 2, 4);
+    h->imgOffset = readLittleEndian(fp, 10, 4);
+    h->headSize = readLittleEndian(fp, 14, 4);
+    ASSERT(h->headSize == 124, "Error in readBMPHeader: Header not a BITMAPV5HEADER.\n");
+    h->width = readLittleEndian(fp, 18, 4);
+    h->height = readLittleEndian(fp, 22, 4);
+    h->bitsPerPixel = readLittleEndian(fp, 28, 2);
+    fseek(fp, 0, SEEK_SET);
+}
+
+
+
+
+void rgbBMPTransform(FILE *infp, FILE *outfp) {
+    BMPFileHeader h;
+    readBMPHeader(infp, &h);
+    ASSERT((h.width * h.bitsPerPixel/8) % 4 == 0, "Error in rgbBMPTransform: Row size not multiple of 4 bytes, handling padding not yet implemented.\n");
+    ASSERT(h.bitsPerPixel == 24, "Error in rgbBMPTransform: support for bitsPerPixel other than 24 not implemented.\n")
+
+    char *red = (char*) malloc(3 * h.width * h.height);
+    char *blue = red + h.width * h.height;
+    char *green = blue + h.width * h.height;
+
+    for (int i=0; i < h.imgOffset; i++) {
+        int c = fgetc(infp);
+        ASSERT(c != EOF, "Error in rgbBMPTransform: Unexpected end of file in header.\n");
+        fputc((char) c, outfp);
+    }
+
+    // Split into 3 color channels
+    int rOff = 0;
+    int gOff = 0;
+    int bOff = 0;
+    for (int i=0; i < h.height; i++) {
+        for (int j=0; j < h.width; j++) {
+            int b = fgetc(infp);
+            int g = fgetc(infp);
+            int r = fgetc(infp);
+            ASSERT((b != EOF) && (g != EOF) && (r != EOF), "Error in rgbBMPTransform: Unexpected end of file in image data.\n");
+            *(red+rOff) = (char) r;
+            *(green+gOff) = (char) g;
+            *(blue+bOff) = (char) b;
+            rOff++;
+            gOff++;
+            bOff++;
+        }
+    }
+    
+    // Write the separated color channels sequentially (all red, then green, then blue)
+    for (int i=0; i < 3 * h.width * h.height; i++) {
+        char c = *(red+i);
+        fputc(c, outfp);
+    }
+
+    // If there's anything else copy it over.
+    int c;
+    while ((c = fgetc(infp)) != EOF) {
+        fputc((char) c, outfp);
+    }
+
+    free(red);
+
+}
+
+
 
 /*
  *  Relative encoding
@@ -306,8 +401,18 @@ int main(int argc, char* argv[]) {
         fclose(outfp);
     }
     else {
-        printf("Testing file %s:\n", baseFile);
-        testCompression(baseFile, compress, decompress);
+        //printf("Testing file %s:\n", baseFile);
+        //testCompression(baseFile, compress, decompress);
+        BMPFileHeader head;
+        infp = fopen("image.bmp", "rb");
+        outfp = fopen("image.bmp-split", "wb");
+        //printf("Size: %d\n", head.size);
+        //printf("Offset: %d\n", head.imgOffset);
+        //printf("Image width: %d\n", head.width);
+        //printf("Image height: %d\n", head.height);
+        //printf("Bits per Pixel: %d\n", head.bitsPerPixel);
+        
+        rgbBMPTransform(infp, outfp);
     }
 
     
