@@ -4,3 +4,5 @@ image*
 *-decomp
 build/*
 scores.txt
+src/.*
+.*

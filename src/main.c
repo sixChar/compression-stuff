@@ -51,19 +51,19 @@ void readBMPHeader(FILE *fp, BMPFileHeader *h) {
 
 
 
-void rgbBMPTransform(FILE *infp, FILE *outfp) {
+void rgbTransform(FILE *infp, FILE *outfp) {
     BMPFileHeader h;
     readBMPHeader(infp, &h);
-    ASSERT((h.width * h.bitsPerPixel/8) % 4 == 0, "Error in rgbBMPTransform: Row size not multiple of 4 bytes, handling padding not yet implemented.\n");
-    ASSERT(h.bitsPerPixel == 24, "Error in rgbBMPTransform: support for bitsPerPixel other than 24 not implemented.\n")
+    ASSERT((h.width * h.bitsPerPixel/8) % 4 == 0, "Error in rgbTransform: Row size not multiple of 4 bytes, handling padding not yet implemented.\n");
+    ASSERT(h.bitsPerPixel == 24, "Error in rgbTransform: support for bitsPerPixel other than 24 not implemented.\n");
 
-    char *red = (char*) malloc(3 * h.width * h.height);
-    char *blue = red + h.width * h.height;
+    char *blue = (char*) malloc(3 * h.width * h.height);
     char *green = blue + h.width * h.height;
+    char *red = green + h.width * h.height;
 
     for (int i=0; i < h.imgOffset; i++) {
         int c = fgetc(infp);
-        ASSERT(c != EOF, "Error in rgbBMPTransform: Unexpected end of file in header.\n");
+        ASSERT(c != EOF, "Error in rgbTransform: Unexpected end of file in header.\n");
         fputc((char) c, outfp);
     }
 
@@ -76,19 +76,19 @@ void rgbBMPTransform(FILE *infp, FILE *outfp) {
             int b = fgetc(infp);
             int g = fgetc(infp);
             int r = fgetc(infp);
-            ASSERT((b != EOF) && (g != EOF) && (r != EOF), "Error in rgbBMPTransform: Unexpected end of file in image data.\n");
-            *(red+rOff) = (char) r;
-            *(green+gOff) = (char) g;
+            ASSERT((b != EOF) && (g != EOF) && (r != EOF), "Error in rgbTransform: Unexpected end of file in image data.\n");
             *(blue+bOff) = (char) b;
-            rOff++;
-            gOff++;
+            *(green+gOff) = (char) g;
+            *(red+rOff) = (char) r;
             bOff++;
+            gOff++;
+            rOff++;
         }
     }
     
     // Write the separated color channels sequentially (all red, then green, then blue)
     for (int i=0; i < 3 * h.width * h.height; i++) {
-        char c = *(red+i);
+        char c = *(blue+i);
         fputc(c, outfp);
     }
 
@@ -98,10 +98,41 @@ void rgbBMPTransform(FILE *infp, FILE *outfp) {
         fputc((char) c, outfp);
     }
 
-    free(red);
-
+    free(blue);
 }
 
+
+void invRGBTransform(FILE *infp, FILE *outfp) {
+    BMPFileHeader h;
+    readBMPHeader(infp, &h);
+    ASSERT((h.width * h.bitsPerPixel/8) % 4 == 0, "Error in rgbTransform: Row size not multiple of 4 bytes, handling padding not yet implemented.\n");
+    ASSERT(h.bitsPerPixel == 24, "Error in rgbTransform: support for bitsPerPixel other than 24 not implemented.\n");
+
+    char *pixels = (char*) malloc(3 * h.width * h.height);
+
+    for (int i=0; i < h.imgOffset; i++) {
+        int c = fgetc(infp);
+        ASSERT(c != EOF, "Error in rgbTransform: Unexpected end of file in header.\n");
+        fputc((char) c, outfp);
+    }
+
+    // Extract color channels into one pixel array with 3 colors per pixel
+    for (int color=0; color < 3; color++) {
+        for (int i=0; i < h.width * h.height; i++) {
+            int c = fgetc(infp);
+            ASSERT(c != EOF, "Error in rgbInvTransform: Unexpected end of file in image data\n");
+            *(pixels + 3 * i + color) = (char) c;
+        }
+    }
+
+    // Write combined color array
+    for (int i=0; i < 3 * h.width * h.height; i++) {
+        fputc(*(pixels+i), outfp);
+    }
+
+    free(pixels);
+    
+}
 
 
 /*
@@ -109,7 +140,7 @@ void rgbBMPTransform(FILE *infp, FILE *outfp) {
  *  
  *  NOTE: Does not work with stdin
  */
-void comp_relative(FILE *infp, FILE *outfp) {
+void compRelative(FILE *infp, FILE *outfp) {
     int curr, last;
     int min = 255;
     int max = -256;
@@ -141,7 +172,7 @@ void comp_relative(FILE *infp, FILE *outfp) {
     }
     
 }
-void decomp_relative(FILE *infp, FILE *outfp) {
+void decompRelative(FILE *infp, FILE *outfp) {
     int curr = fgetc(infp);
     ASSERT(curr == 0x00);
     while ((curr = fgetc(infp)) != EOF) {
@@ -164,7 +195,7 @@ void decomp_relative(FILE *infp, FILE *outfp) {
  * This is because there are no 0 bytes in that file. This version handles
  * 0s more gracefully.
  */
-void comp_rle(FILE *infp, FILE *outfp) {
+void compRLE(FILE *infp, FILE *outfp) {
     int curr, last;
     int count = 1;
     last = fgetc(infp);
@@ -208,7 +239,7 @@ void comp_rle(FILE *infp, FILE *outfp) {
 }
 
 
-void decomp_rle(FILE *infp, FILE *outfp) {
+void decompRLE(FILE *infp, FILE *outfp) {
     int curr, last;
     int count=1;
     last = fgetc(infp);
@@ -332,8 +363,8 @@ void testCompression(char *baseFile, TformPtr compress, TformPtr decompress) {
 int main(int argc, char* argv[]) {
     FILE *infp; 
     FILE *outfp;
-    TformPtr compress = comp_rle;
-    TformPtr decompress = decomp_rle;
+    TformPtr compress = rgbTransform;
+    TformPtr decompress = invRGBTransform;
     char *baseFile = "image.bmp";
     char fname[1024];
     if (argc == 2 && *argv[1] == 'c') {
@@ -401,18 +432,9 @@ int main(int argc, char* argv[]) {
         fclose(outfp);
     }
     else {
-        //printf("Testing file %s:\n", baseFile);
-        //testCompression(baseFile, compress, decompress);
-        BMPFileHeader head;
-        infp = fopen("image.bmp", "rb");
-        outfp = fopen("image.bmp-split", "wb");
-        //printf("Size: %d\n", head.size);
-        //printf("Offset: %d\n", head.imgOffset);
-        //printf("Image width: %d\n", head.width);
-        //printf("Image height: %d\n", head.height);
-        //printf("Bits per Pixel: %d\n", head.bitsPerPixel);
+        printf("Testing file %s:\n", baseFile);
+        testCompression(baseFile, compress, decompress);
         
-        rgbBMPTransform(infp, outfp);
     }
 
     
