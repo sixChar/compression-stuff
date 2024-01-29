@@ -49,8 +49,6 @@ void readBMPHeader(FILE *fp, BMPFileHeader *h) {
 }
 
 
-
-
 void rgbTransform(FILE *infp, FILE *outfp) {
     BMPFileHeader h;
     readBMPHeader(infp, &h);
@@ -187,8 +185,9 @@ void decompRelative(FILE *infp, FILE *outfp) {
  *
  * Compression Ratios:
  * ==========================
- * enwik9-sm        1.00148
- * image.bmp        1.00088
+ * enwik9-sm                    1.00148
+ * image.bmp                    1.00088
+ * image.bmp (w/ rgbTransform)  1.06309
  *
  * Note: Previously used 0 as a padding byte but this lead to pretty bad
  * expansion in image file. However the perfrmance was better on enwik9-sm.
@@ -291,8 +290,44 @@ void decompRLE(FILE *infp, FILE *outfp) {
 }
 
 
+void applyTformStack(FILE* infp, FILE* outfp, int nTforms, TformPtr* stack) {
+    if (nTforms == 1) {
+        (*stack)(infp, outfp);
+    } else {
 
-void testCompression(char *baseFile, TformPtr compress, TformPtr decompress) {
+        FILE* tmp1 = tmpfile();
+        ASSERT(tmp1, "Error creating temp file 1 in applyTformStack\n");
+
+        FILE* tmp2 = tmpfile();
+        ASSERT(tmp2, "Error creating temp file 2 in applyTformStack\n");
+
+        FILE* swapTmp;
+
+        // Apply first transform
+        (*stack++)(infp, tmp1);
+        rewind(tmp1);
+        
+        // Apply second to second-to-last transforms
+        for (int i=1; i < nTforms-1; i++) {
+            (*stack++)(tmp1, tmp2);
+            swapTmp = tmp2;
+            tmp2 = tmp1;
+            tmp1 = swapTmp;
+            rewind(tmp1);
+            rewind(tmp2);
+        }
+
+        // Apply last transform
+        (*stack++)(tmp1, outfp);
+
+        fclose(tmp1);
+        fclose(tmp2);
+        
+    }
+}
+
+
+void testCompression(char *baseFile, int nTforms, TformPtr* compress, TformPtr* decompress) {
     FILE *infp;
     FILE *outfp;
 
@@ -300,7 +335,7 @@ void testCompression(char *baseFile, TformPtr compress, TformPtr decompress) {
 
     long int baseBytes;
     long int compBytes;
-    
+
     // Compress file
     printf("Compressing file...\n");
     // set fname to "base.file"
@@ -311,7 +346,7 @@ void testCompression(char *baseFile, TformPtr compress, TformPtr decompress) {
     strcat(fname, "-comp");
     outfp = fopen(fname, "wb");
 
-    compress(infp, outfp);
+    applyTformStack(infp, outfp, nTforms, compress);
 
     // Make sure at end of files and count bytes
     fseek(infp, 0, SEEK_END);
@@ -332,7 +367,7 @@ void testCompression(char *baseFile, TformPtr compress, TformPtr decompress) {
     strcat(fname, "-decomp");
     outfp = fopen(fname, "wb");
 
-    decompress(infp, outfp);
+    applyTformStack(infp, outfp, nTforms, decompress);
 
     fclose(infp);
     fclose(outfp);
@@ -360,11 +395,16 @@ void testCompression(char *baseFile, TformPtr compress, TformPtr decompress) {
 }
 
 
+
+
+
 int main(int argc, char* argv[]) {
+    TformPtr compress[2] = {rgbTransform, compRLE};
+    TformPtr decompress[2] = {decompRLE, invRGBTransform};
+    int nTforms = 2;
+
     FILE *infp; 
     FILE *outfp;
-    TformPtr compress = rgbTransform;
-    TformPtr decompress = invRGBTransform;
     char *baseFile = "image.bmp";
     char fname[1024];
     if (argc == 2 && *argv[1] == 'c') {
@@ -380,7 +420,7 @@ int main(int argc, char* argv[]) {
 
         ASSERT(infp != NULL && outfp != NULL);
 
-        compress(infp, outfp);
+        applyTformStack(infp, outfp, nTforms, compress);
         printf("Done.\n");
 
         fclose(infp);
@@ -401,7 +441,7 @@ int main(int argc, char* argv[]) {
 
         ASSERT(infp != NULL && outfp != NULL);
 
-        decompress(infp, outfp);
+        applyTformStack(infp, outfp, nTforms, decompress);
         printf("Done.\n");
 
         fclose(infp);
@@ -433,7 +473,7 @@ int main(int argc, char* argv[]) {
     }
     else {
         printf("Testing file %s:\n", baseFile);
-        testCompression(baseFile, compress, decompress);
+        testCompression(baseFile, nTforms, compress, decompress);
         
     }
 
