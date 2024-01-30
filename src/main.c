@@ -23,6 +23,12 @@ typedef struct BMPFileHeader {
     int bitsPerPixel;
 } BMPFileHeader;
 
+void rangeArr(int n, int* arr) {
+    for (int i=0; i < n; i++) {
+        arr[i] = i;
+    }
+}
+
 int readLittleEndian(FILE *fp, int offset, int nBytes) {
     ASSERT(nBytes <= 4, "Error: readLittleEndian only designed to read max 32 bit ints\n");
     int err = fseek(fp, offset, SEEK_SET);
@@ -49,7 +55,56 @@ void readBMPHeader(FILE *fp, BMPFileHeader *h) {
 }
 
 
-void rgbTransform(FILE *infp, FILE *outfp) {
+void moveToFrontTransform(FILE* infp, FILE* outfp) {
+    // Position that each character maps to
+    int dict[256];
+    rangeArr(256, dict);
+
+    int c;
+    while ((c = fgetc(infp)) != EOF) {
+        int idx = 0;
+        int last;
+        for (idx=0; dict[idx] != c; idx++) {
+            int temp;
+            temp = last;
+            last = dict[idx];
+            dict[idx] = temp;
+        }
+        dict[idx] = last;
+        dict[0] = c;
+
+        fputc((char) idx, outfp);
+    }
+}
+
+
+void invMoveToFrontTransform(FILE* infp, FILE* outfp) {
+    int dict[256];
+    rangeArr(256, dict);
+
+    int idx;
+    while ((idx = fgetc(infp)) != EOF) {
+        int c = dict[idx];
+        fputc((char) c, outfp);
+
+        int last;
+        for (int i=0; i < idx; i++) {
+            int temp = last;
+            last = dict[i];
+            dict[i] = temp;
+        }
+        dict[idx] = last;
+        dict[0] = c;
+    }
+};
+
+
+/*
+ *  Split a BMP image into separate RGB channels
+ *
+ *
+ */
+void rgbTransform(FILE* infp, FILE* outfp) {
     BMPFileHeader h;
     readBMPHeader(infp, &h);
     ASSERT((h.width * h.bitsPerPixel/8) % 4 == 0, "Error in rgbTransform: Row size not multiple of 4 bytes, handling padding not yet implemented.\n");
@@ -399,9 +454,9 @@ void testCompression(char *baseFile, int nTforms, TformPtr* compress, TformPtr* 
 
 
 int main(int argc, char* argv[]) {
-    TformPtr compress[2] = {rgbTransform, compRLE};
-    TformPtr decompress[2] = {decompRLE, invRGBTransform};
-    int nTforms = 2;
+    TformPtr compress[1] = {moveToFrontTransform};
+    TformPtr decompress[1] = {invMoveToFrontTransform};
+    int nTforms = 1;
 
     FILE *infp; 
     FILE *outfp;
@@ -474,7 +529,6 @@ int main(int argc, char* argv[]) {
     else {
         printf("Testing file %s:\n", baseFile);
         testCompression(baseFile, nTforms, compress, decompress);
-        
     }
 
     
