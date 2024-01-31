@@ -4,12 +4,15 @@
 #include <string.h>
 #include "util.h"
 
-// Crash on failed assert
 #define GET_MACRO(_1, _2, NAME,...) NAME
 
+// Crash on failed assert
 #define ASSERT1(expr) if (!(expr)) {*(int*)0=0;}
 #define ASSERT2(expr, msg) if (!(expr)) {fprintf(stderr, msg); *(int*)0=0;}
 #define ASSERT(...) GET_MACRO(__VA_ARGS__, ASSERT2, ASSERT1)(__VA_ARGS__)
+
+#define IMG_QUANT_FAC 16
+
 
 typedef void (*TformPtr)(FILE*, FILE*);
 
@@ -52,6 +55,21 @@ void readBMPHeader(FILE *fp, BMPFileHeader *h) {
     h->height = readLittleEndian(fp, 22, 4);
     h->bitsPerPixel = readLittleEndian(fp, 28, 2);
     fseek(fp, 0, SEEK_SET);
+}
+
+void copyBMPHeader(FILE* infp, FILE* outfp, BMPFileHeader* h) {
+    for (int i=0; i < h->imgOffset; i++) {
+        int c = fgetc(infp);
+        ASSERT(c != EOF, "Error: Unexpected end of file in header.\n");
+        fputc((char) c, outfp);
+    }
+}
+
+void copyRemaining(FILE* infp, FILE* outfp) {
+    int c;
+    while ((c = fgetc(infp)) != EOF) {
+        fputc((char) c, outfp);
+    }
 }
 
 
@@ -99,9 +117,55 @@ void invMoveToFrontTransform(FILE* infp, FILE* outfp) {
 };
 
 
+void imgQuantTransform(FILE* infp, FILE* outfp) {
+    BMPFileHeader h;
+    readBMPHeader(infp, &h);
+    copyBMPHeader(infp, outfp, &h);
+
+    int fac = IMG_QUANT_FAC;
+    int s = 255 / fac;
+    
+    int c;
+    for (int i=0; i < h.height * h.width * (h.bitsPerPixel/8); i++) {
+        c = fgetc(infp);
+        ASSERT(c != EOF, "Error in imgQuantTransform: Unexpected end of file!\n");
+        if ( c > 256-fac || c % fac < fac / 2) {
+            c = c / fac;
+        } else {
+            c = c / fac + 1;
+        }
+        fputc((char) c, outfp);
+    }
+
+    copyRemaining(infp, outfp);
+}
+
+
+void invImgQuantTransform(FILE* infp, FILE* outfp) {
+    BMPFileHeader h;
+    readBMPHeader(infp, &h);
+    copyBMPHeader(infp, outfp, &h);
+
+    int fac = IMG_QUANT_FAC;
+    int s = 255 / fac;
+
+    int c;
+    for (int i=0; i < h.height * h.width * (h.bitsPerPixel/8); i++) {
+        c = fgetc(infp);
+        ASSERT(c != EOF, "Error in imgQuantTransform: Unexpected end of file!\n");
+        //if (c > s) {
+        //    c = c - 1;
+        //}
+        c = c * fac;
+        fputc((char) c, outfp);
+    }
+
+    copyRemaining(infp, outfp);
+}
+
+
 /*
  *  Split a BMP image into separate RGB channels
- *
  *
  */
 void rgbTransform(FILE* infp, FILE* outfp) {
@@ -114,11 +178,7 @@ void rgbTransform(FILE* infp, FILE* outfp) {
     char *green = blue + h.width * h.height;
     char *red = green + h.width * h.height;
 
-    for (int i=0; i < h.imgOffset; i++) {
-        int c = fgetc(infp);
-        ASSERT(c != EOF, "Error in rgbTransform: Unexpected end of file in header.\n");
-        fputc((char) c, outfp);
-    }
+    copyBMPHeader(infp, outfp, &h);
 
     // Split into 3 color channels
     int rOff = 0;
@@ -146,10 +206,7 @@ void rgbTransform(FILE* infp, FILE* outfp) {
     }
 
     // If there's anything else copy it over.
-    int c;
-    while ((c = fgetc(infp)) != EOF) {
-        fputc((char) c, outfp);
-    }
+    copyRemaining(infp, outfp);
 
     free(blue);
 }
@@ -163,11 +220,7 @@ void invRGBTransform(FILE *infp, FILE *outfp) {
 
     char *pixels = (char*) malloc(3 * h.width * h.height);
 
-    for (int i=0; i < h.imgOffset; i++) {
-        int c = fgetc(infp);
-        ASSERT(c != EOF, "Error in rgbTransform: Unexpected end of file in header.\n");
-        fputc((char) c, outfp);
-    }
+    copyBMPHeader(infp, outfp, &h);
 
     // Extract color channels into one pixel array with 3 colors per pixel
     for (int color=0; color < 3; color++) {
@@ -182,8 +235,10 @@ void invRGBTransform(FILE *infp, FILE *outfp) {
     for (int i=0; i < 3 * h.width * h.height; i++) {
         fputc(*(pixels+i), outfp);
     }
-
     free(pixels);
+
+    copyRemaining(infp, outfp);
+
     
 }
 
@@ -438,7 +493,8 @@ void testCompression(char *baseFile, int nTforms, TformPtr* compress, TformPtr* 
 
     int i;
     if ((i = diff_file(infp, outfp))) {
-        printf("ERROR: Files different at %d\n", i);
+        printf("NOTE: Files different at %d\n", i);
+        printf("Compression ratio: %.5Lf\n", (long double) baseBytes / (long double) compBytes);
     }
     else {
         printf("Same!\n");
@@ -454,8 +510,8 @@ void testCompression(char *baseFile, int nTforms, TformPtr* compress, TformPtr* 
 
 
 int main(int argc, char* argv[]) {
-    TformPtr compress[1] = {moveToFrontTransform};
-    TformPtr decompress[1] = {invMoveToFrontTransform};
+    TformPtr compress[1] = {imgQuantTransform};
+    TformPtr decompress[1] = {invImgQuantTransform};
     int nTforms = 1;
 
     FILE *infp; 
