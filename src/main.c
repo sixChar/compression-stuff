@@ -14,6 +14,8 @@
 #define IMG_QUANT_FAC 16
 
 
+
+
 typedef void (*TformPtr)(FILE*, FILE*);
 
 
@@ -73,6 +75,104 @@ void copyRemaining(FILE* infp, FILE* outfp) {
 }
 
 
+typedef struct HuffNode{
+    int sym;
+    float weight;
+    struct HuffNode *left;
+    struct HuffNode *right;
+} HuffNode;
+
+
+/*
+ *
+ *  TODO: Do better sorting
+ *
+ */
+void sortHuffNodes(HuffNode** nodes, int nNodes) {
+    for (int i=0; i < nNodes-1; i++) {
+        for (int j=i+1; j < nNodes; j++) {
+            if (nodes[i]->weight < nodes[j]->weight) {
+                HuffNode* temp;
+                temp = nodes[i];
+                nodes[i] = nodes[j];
+                nodes[j] = temp;
+            }
+        }
+    }
+}
+
+/*
+ *  TODO: Do less malloc
+ *
+ */
+HuffNode* buildHuffman(int *syms, float * weights, int nSym) {
+    HuffNode** leaves = (HuffNode**) malloc(sizeof(HuffNode*) * nSym);    
+    for (int i=0; i < nSym; i++) {
+        HuffNode* leaf = (HuffNode*) malloc(sizeof(HuffNode));
+        leaf->sym = syms[i];
+        leaf->weight = weights[i];
+        leaf->left = 0;
+        leaf->right = 0;
+        leaves[i] = leaf;
+    }
+
+    sortHuffNodes(leaves, nSym);
+
+    int nNodes = nSym;
+    while (nNodes > 1) {
+        HuffNode* parent = (HuffNode*) malloc(sizeof(HuffNode));
+        parent->right = leaves[nNodes-1];
+        parent->left = leaves[nNodes-2];
+        parent->weight = leaves[nNodes-1]->weight + leaves[nNodes-2]->weight;
+
+        // Insert into leaves 
+        // TODO: Make better
+        for (int i=0; i < nNodes-2; i++) {
+            HuffNode* temp;
+            if (parent->weight > leaves[i]->weight) {
+                temp = leaves[i];
+                leaves[i] = parent;
+                parent = temp;
+            }
+        } 
+        leaves[nNodes-2] = parent;
+        nNodes--;
+    }
+    HuffNode* result = leaves[0];
+    free(leaves);
+    return result;
+}
+
+
+void printHuffmanTree(HuffNode* root, int tabs) {
+    if (root != 0) {
+        if (root->left == 0 && root->right == 0) {
+            for (int i=0; i < tabs; i++) {
+                printf("  ");
+            }
+            printf("weight: %.4f  sym: %d\n", root->weight, root->sym);
+        } else {
+            for (int i=0; i < tabs; i++) {
+                printf("  ");
+            }
+            printf("weight: %.4f\n", root->weight);
+            for (int i=0; i < tabs; i++) {
+                printf("  ");
+            }
+            printf("Left:\n");
+            printHuffmanTree(root->left, tabs+1);
+            for (int i=0; i < tabs; i++) {
+                printf("  ");
+            }
+            printf("Right:\n");
+            printHuffmanTree(root->right, tabs+1);
+            printf("\n");
+        }
+    }
+}
+
+
+
 void moveToFrontTransform(FILE* infp, FILE* outfp) {
     // Position that each character maps to
     int dict[256];
@@ -123,7 +223,6 @@ void imgQuantTransform(FILE* infp, FILE* outfp) {
     copyBMPHeader(infp, outfp, &h);
 
     int fac = IMG_QUANT_FAC;
-    int s = 255 / fac;
     
     int c;
     for (int i=0; i < h.height * h.width * (h.bitsPerPixel/8); i++) {
@@ -147,7 +246,6 @@ void invImgQuantTransform(FILE* infp, FILE* outfp) {
     copyBMPHeader(infp, outfp, &h);
 
     int fac = IMG_QUANT_FAC;
-    int s = 255 / fac;
 
     int c;
     for (int i=0; i < h.height * h.width * (h.bitsPerPixel/8); i++) {
@@ -583,8 +681,16 @@ int main(int argc, char* argv[]) {
         fclose(outfp);
     }
     else {
-        printf("Testing file %s:\n", baseFile);
-        testCompression(baseFile, nTforms, compress, decompress);
+        //printf("Testing file %s:\n", baseFile);
+        //testCompression(baseFile, nTforms, compress, decompress);
+        
+
+        int n = 5;
+        float weights[5] = {15.0, 7.0, 6.0, 6.0, 5.0};
+        int syms[5] = {1, 2, 3, 4, 5};
+        
+        HuffNode* tree = buildHuffman(syms, weights, n);
+        printHuffmanTree(tree, 0);
     }
 
     
