@@ -83,66 +83,69 @@ typedef struct HuffNode{
 } HuffNode;
 
 
+
+
 /*
  *
- *  TODO: Do better sorting
+ * NOTE: THIS METHOD ASSUMES YOU HAVE AT LEAST n+1 MEMORY ALLOCATED FOR THE SORTED
+ *       NODES AND DON'T CARE WHAT HAPPENS TO THE VALUE STORED AT INDEX n.
  *
  */
-void sortHuffNodes(HuffNode** nodes, int nNodes) {
-    for (int i=0; i < nNodes-1; i++) {
-        for (int j=i+1; j < nNodes; j++) {
-            if (nodes[i]->weight < nodes[j]->weight) {
-                HuffNode* temp;
-                temp = nodes[i];
-                nodes[i] = nodes[j];
-                nodes[j] = temp;
-            }
+void insertIntoHuffNodes(HuffNode** sortedNodes, int n, HuffNode* node) {
+    if (n == 0) {
+        sortedNodes[0] = node;
+    }
+    for (int i=n-1; i >= 0; i--) {
+        if (sortedNodes[i]->weight >= node->weight) {
+            sortedNodes[i+1] = node;
+            break;
+        } else if (i > 0) {
+            sortedNodes[i+1] = sortedNodes[i];
+        } else {
+            sortedNodes[i+1] = sortedNodes[i];
+            sortedNodes[0] = node;
         }
     }
 }
 
-/*
- *  TODO: Do less malloc
- *
- */
-HuffNode* buildHuffman(int *syms, float * weights, int nSym) {
-    HuffNode** leaves = (HuffNode**) malloc(sizeof(HuffNode*) * nSym);    
-    for (int i=0; i < nSym; i++) {
-        HuffNode* leaf = (HuffNode*) malloc(sizeof(HuffNode));
-        leaf->sym = syms[i];
-        leaf->weight = weights[i];
-        leaf->left = 0;
-        leaf->right = 0;
-        leaves[i] = leaf;
+
+void sortHuffNodes(HuffNode** nodes, int n) {
+    for (int i=1; i < n; i++) {
+        insertIntoHuffNodes(nodes, i, nodes[i]);
     }
-
-    sortHuffNodes(leaves, nSym);
-
-    int nNodes = nSym;
-    while (nNodes > 1) {
-        HuffNode* parent = (HuffNode*) malloc(sizeof(HuffNode));
-        parent->right = leaves[nNodes-1];
-        parent->left = leaves[nNodes-2];
-        parent->weight = leaves[nNodes-1]->weight + leaves[nNodes-2]->weight;
-
-        // Insert into leaves 
-        // TODO: Make better
-        for (int i=0; i < nNodes-2; i++) {
-            HuffNode* temp;
-            if (parent->weight > leaves[i]->weight) {
-                temp = leaves[i];
-                leaves[i] = parent;
-                parent = temp;
-            }
-        } 
-        leaves[nNodes-2] = parent;
-        nNodes--;
-    }
-    HuffNode* result = leaves[0];
-    free(leaves);
-    return result;
 }
 
+
+HuffNode* buildHuffman(int* syms, float* weights, int nSym) {
+    // Since every non-leaf node has 2 children there will be 2n-1 total nodes
+    // with n being the number of leaves (symbols)
+    HuffNode* root = (HuffNode*) malloc(sizeof(HuffNode) * 2 * nSym - 1);
+    HuffNode** orphans = (HuffNode**) malloc(sizeof(HuffNode*) * nSym);
+
+    for (int i=0; i < nSym; i++) {
+        HuffNode* curr = root+nSym-1+i;
+        // Symbols are unordered to start
+        *(orphans+i) = curr;
+        curr->sym = syms[i];
+        curr->weight = weights[i];
+        curr->left = 0;
+        curr->right = 0;
+    }
+
+    int nOrphans = nSym;
+    sortHuffNodes(orphans, nOrphans);
+
+    for (; nOrphans > 1; nOrphans--) {
+        HuffNode* curr = (root + nOrphans-2);
+        curr->left = orphans[nOrphans-2];
+        curr->right = orphans[nOrphans-1];
+        curr->weight = curr->left->weight + curr->right->weight;
+        insertIntoHuffNodes(orphans, nOrphans-2, curr);
+    }
+
+    free(orphans);
+    return root;
+}
 
 void printHuffmanTree(HuffNode* root, int tabs) {
     if (root != 0) {
