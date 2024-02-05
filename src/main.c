@@ -14,6 +14,7 @@
 #define IMG_QUANT_FAC 16
 
 
+typedef uint8_t u8;
 
 
 typedef void (*TformPtr)(FILE*, FILE*);
@@ -145,6 +146,87 @@ HuffNode* buildHuffman(int* syms, float* weights, int nSym) {
 
     free(orphans);
     return root;
+}
+
+
+typedef struct HuffTable {
+    int nSym;
+    int entrySize;
+    u8* codes;
+    int* codeLens;
+} HuffTable;
+
+
+int findMaxHuffLength(HuffNode* tree) {
+    if (tree == NULL) {
+        return 0;
+    }
+
+    int leftL = findMaxHuffLength(tree->left);
+    int rightL = findMaxHuffLength(tree->right);
+    if (leftL > rightL) {
+        return leftL+1;
+    } else {
+        return rightL+1;
+    }
+}
+
+
+
+void recursiveGenHuffCodes(HuffTable* res, HuffNode* tree, u8* currCode, int depth) {
+    if (tree->left == NULL || tree->right == NULL) {
+        ASSERT(tree->left == tree->right, "Error: malformed tree. All nodes must be full or leaves.\n");
+        int sym = tree->sym;
+        for (int i=0; i <= depth/8; i++) {
+            res->codes[sym+i] = currCode[i];
+        }
+        res->codeLens[sym] = depth;
+    } else {
+        // Set current bit to 1
+        currCode[depth/8] |= 0x80 >> (depth % 8);
+        recursiveGenHuffCodes(res, tree->right, currCode, depth+1);
+        // Set current bit to 0
+        currCode[depth/8] &= ~(0x80 >> (depth % 8));
+        recursiveGenHuffCodes(res, tree->left, currCode, depth+1);
+    }
+}
+
+void extractHuffCodes(HuffTable* res, HuffNode* tree) {
+    int maxLen = findMaxHuffLength(tree);
+    // Allocate enough space for every symbol to fit the longest code
+    res->entrySize = (maxLen + 7) / 8 * sizeof(u8);
+    res->codes = (u8*) malloc(res->entrySize * res->nSym + sizeof(int) * res->nSym);
+    res->codeLens = (int*) (res->codes + res->entrySize*res->nSym);
+
+    // holder for current code
+    u8* currCode = (u8*) malloc(res->entrySize);
+    for (int i=0; i < res->entrySize; i++) {
+        currCode[i] = 0;
+    }
+
+    recursiveGenHuffCodes(res, tree, currCode, 0);
+
+    free(currCode);
+
+    
+}
+
+void printHuffTable(HuffTable* table) {
+    printf("Huff table:\n");
+    printf("Num entries: %d\n", table->nSym);
+    printf("Entry size: %d\n", table->entrySize);
+    printf("Codes:\n");
+    for (int i=0; i < table->nSym; i++) {
+        printf("  %i (length %i): ", i, table->codeLens[i]);
+        for (int j=0; j < table->codeLens[i]; j++) {
+            if ((table->codes[i*table->entrySize + j/8] & (0x80 >> (j%8))) == 0) {
+                printf("0");
+            } else {
+                printf("1");
+            }
+        }
+        printf("\n");
+    }
 }
 
 void printHuffmanTree(HuffNode* root, int tabs) {
@@ -690,10 +772,14 @@ int main(int argc, char* argv[]) {
 
         int n = 5;
         float weights[5] = {15.0, 7.0, 6.0, 6.0, 5.0};
-        int syms[5] = {1, 2, 3, 4, 5};
+        int syms[5] = {0, 1, 2, 3, 4};
         
         HuffNode* tree = buildHuffman(syms, weights, n);
         printHuffmanTree(tree, 0);
+        HuffTable table;
+        table.nSym = n; 
+        extractHuffCodes(&table, tree);
+        printHuffTable(&table);
     }
 
     
