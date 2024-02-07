@@ -16,6 +16,59 @@
 
 typedef uint8_t u8;
 
+typedef struct BitFile {
+    FILE* fp;
+    char buffer;
+    u8 count;
+    
+} BitFile;
+
+
+int bfRead(BitFile* bfp) {
+    if (bfp->count == 0) {
+        int c = fgetc(bfp->fp);
+        if (c == EOF) {
+            return c;
+        }
+        bfp->buffer = (char) c;
+        bfp->count = 8;
+    }
+    bfp->count--;
+    return (int) ((bfp->buffer >> bfp->count) & 1);
+}
+
+
+void bfWrite(char c, BitFile* bfp) {
+    // Set next buffer bit on if c is not 0
+    bfp->buffer |= (((c != 0) << (7-bfp->count)));
+    bfp->count++;
+    if (bfp->count == 8) {
+        fputc(bfp->buffer, bfp->fp);
+        bfp->buffer = 0x00;
+        bfp->count = 0;
+    }
+}
+
+
+void bfWriteClose(BitFile* bfp) {
+    // Force caller to handle padding
+    ASSERT(bfp->count == 0, "Bit files must end on byte alignment.\n");
+    fclose(bfp->fp);
+}
+
+void bfReadClose(BitFile* bfp) {
+    fclose(bfp->fp);
+}
+
+
+void bfOpen(BitFile* bfp, const char* fname, const char* mode) {
+    bfp->fp = fopen(fname, mode);
+    bfp->buffer = 0x00;
+    bfp->count = 0;
+}
+
+
+
 
 typedef void (*TformPtr)(FILE*, FILE*);
 
@@ -28,6 +81,9 @@ typedef struct BMPFileHeader {
     int height;
     int bitsPerPixel;
 } BMPFileHeader;
+
+
+
 
 void rangeArr(int n, int* arr) {
     for (int i=0; i < n; i++) {
@@ -191,6 +247,7 @@ void recursiveGenHuffCodes(HuffTable* res, HuffNode* tree, u8* currCode, int dep
     }
 }
 
+
 void extractHuffCodes(HuffTable* res, HuffNode* tree) {
     int maxLen = findMaxHuffLength(tree);
     // Allocate enough space for every symbol to fit the longest code
@@ -207,9 +264,8 @@ void extractHuffCodes(HuffTable* res, HuffNode* tree) {
     recursiveGenHuffCodes(res, tree, currCode, 0);
 
     free(currCode);
-
-    
 }
+
 
 void printHuffTable(HuffTable* table) {
     printf("Huff table:\n");
@@ -228,6 +284,7 @@ void printHuffTable(HuffTable* table) {
         printf("\n");
     }
 }
+
 
 void printHuffmanTree(HuffNode* root, int tabs) {
     if (root != 0) {
@@ -256,6 +313,10 @@ void printHuffmanTree(HuffNode* root, int tabs) {
     }
 }
 
+
+void huffmanEncode(BitFile* infp, BitFile* outfp, HuffTable* table) {
+    
+}
 
 
 void moveToFrontTransform(FILE* infp, FILE* outfp) {
@@ -336,9 +397,6 @@ void invImgQuantTransform(FILE* infp, FILE* outfp) {
     for (int i=0; i < h.height * h.width * (h.bitsPerPixel/8); i++) {
         c = fgetc(infp);
         ASSERT(c != EOF, "Error in imgQuantTransform: Unexpected end of file!\n");
-        //if (c > s) {
-        //    c = c - 1;
-        //}
         c = c * fac;
         fputc((char) c, outfp);
     }
@@ -770,16 +828,42 @@ int main(int argc, char* argv[]) {
         //testCompression(baseFile, nTforms, compress, decompress);
         
 
-        int n = 5;
-        float weights[5] = {15.0, 7.0, 6.0, 6.0, 5.0};
-        int syms[5] = {0, 1, 2, 3, 4};
+        //int n = 5;
+        //float weights[5] = {15.0, 7.0, 6.0, 6.0, 5.0};
+        //int syms[5] = {0, 1, 2, 3, 4};
+        //
+        //HuffNode* tree = buildHuffman(syms, weights, n);
+        //printHuffmanTree(tree, 0);
+        //HuffTable table;
+        //table.nSym = n; 
+        //extractHuffCodes(&table, tree);
+        //printHuffTable(&table);
         
-        HuffNode* tree = buildHuffman(syms, weights, n);
-        printHuffmanTree(tree, 0);
-        HuffTable table;
-        table.nSym = n; 
-        extractHuffCodes(&table, tree);
-        printHuffTable(&table);
+        BitFile f1;
+        bfOpen(&f1, "test.b", "wb");
+        bfWrite(1, &f1);
+        bfWrite(0, &f1);
+        bfWrite(1, &f1);
+        bfWrite(1, &f1);
+        bfWrite(0, &f1);
+        bfWrite(0, &f1);
+        bfWrite(1, &f1);
+        bfWrite(0, &f1);
+        bfWrite(1, &f1);
+        bfWrite(0, &f1);
+        bfWrite(1, &f1);
+        bfWrite(1, &f1);
+        bfWrite(0, &f1);
+        bfWrite(0, &f1);
+        bfWrite(1, &f1);
+        bfWrite(0, &f1);
+        bfWriteClose(&f1);
+
+        bfOpen(&f1, "test.b", "rb");
+        int c;
+        while ((c = bfRead(&f1)) != EOF) {
+            printf("%d\n", c);
+        }
     }
 
     
