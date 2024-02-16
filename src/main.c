@@ -314,7 +314,43 @@ void printHuffmanTree(HuffNode* root, int tabs) {
 }
 
 
-void huffmanEncode(BitFile* infp, BitFile* outfp, HuffTable* table) {
+u8 getIthBit(u8 *bits, int i) {
+    return *(bits+i/8) && (0x80 >> (i%8));
+}
+
+void huffmanEncode(FILE* infp, BitFile* outfp, HuffTable* table) {
+    int c;
+    while ((c = getc(infp)) != EOF) {
+        int len = table->codeLens[c];    
+        u8* code = table->codes + c * table->entrySize;
+        for (int i=0; i < len; i++) {
+            u8 nextBit = getIthBit(code, i);
+            bfWrite((char) nextBit, outfp);
+        }
+    }
+    if (outfp->count != 0) {
+        // Bits needed to complete the byte
+        int needLen = 8 - outfp->count;
+        // Find code with prefix that would fill byte
+        for (int c=0; c < table->nSym; i++) {
+            int len = table->codeLens[c];    
+            if (len > needLen) {
+                u8* code = outfp->codes + c * table->entrySize;
+                int i = 0;
+                while (outfp->count != 0) {
+                    bfWrite((char) getIthBit(code, i), outfp);
+                    i++;
+                }
+                break;
+            }
+        }
+    }
+}
+
+
+void huffmanDecode(BitFile* infp, FILE* outfp, HuffTree *tree) {
+
+    // TODO: Write decode
     
 }
 
