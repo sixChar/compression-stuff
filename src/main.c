@@ -14,6 +14,16 @@
 #define IMG_QUANT_FAC 16
 
 
+/*
+ *  Compression Ratios:
+ *  Single character counts Huffman Encoding (enwik-9-sm): 1.5595
+ *
+ *
+ *
+ *
+ */
+
+
 typedef uint8_t u8;
 
 typedef struct BitFile {
@@ -63,6 +73,13 @@ void bfReadClose(BitFile* bfp) {
 
 void bfOpen(BitFile* bfp, const char* fname, const char* mode) {
     bfp->fp = fopen(fname, mode);
+    bfp->buffer = 0x00;
+    bfp->count = 0;
+}
+
+
+void bfFromFilePtr(BitFile* bfp, FILE* fp) {
+    bfp->fp = fp;
     bfp->buffer = 0x00;
     bfp->count = 0;
 }
@@ -248,11 +265,18 @@ void recursiveGenHuffCodes(HuffTable* res, HuffNode* tree, u8* currCode, int dep
 }
 
 
+/*
+ * Possible error in this or printHuffTable, check printHuffTable first
+ *
+ */
 void extractHuffCodes(HuffTable* res, HuffNode* tree) {
+    ASSERT(res->nSym, "Need to set HuffTable nSym before calling extractHuffCodes\n");
+    // Max length in bits
     int maxLen = findMaxHuffLength(tree);
-    // Allocate enough space for every symbol to fit the longest code
+
+    // Allocate enough space (in bytes) for every symbol to fit the longest code
     res->entrySize = (maxLen + 7) / 8 * sizeof(u8);
-    res->codes = (u8*) malloc(res->entrySize * res->nSym + sizeof(int) * res->nSym);
+    res->codes = (u8*) malloc(res->entrySize * res->nSym * sizeof(u8) + sizeof(int) * res->nSym);
     res->codeLens = (int*) (res->codes + res->entrySize*res->nSym);
 
     // holder for current code
@@ -267,6 +291,10 @@ void extractHuffCodes(HuffTable* res, HuffNode* tree) {
 }
 
 
+/*
+ *  TODO: Fix error in table printing
+ *
+ */
 void printHuffTable(HuffTable* table) {
     printf("Huff table:\n");
     printf("Num entries: %d\n", table->nSym);
@@ -315,7 +343,7 @@ void printHuffmanTree(HuffNode* root, int tabs) {
 
 
 u8 getIthBit(u8 *bits, int i) {
-    return *(bits+i/8) && (0x80 >> (i%8));
+    return *(bits+i/8) & (0x80 >> (i%8));
 }
 
 void huffmanEncode(FILE* infp, BitFile* outfp, HuffTable* table) {
@@ -332,10 +360,10 @@ void huffmanEncode(FILE* infp, BitFile* outfp, HuffTable* table) {
         // Bits needed to complete the byte
         int needLen = 8 - outfp->count;
         // Find code with prefix that would fill byte
-        for (int c=0; c < table->nSym; i++) {
+        for (int c=0; c < table->nSym; c++) {
             int len = table->codeLens[c];    
             if (len > needLen) {
-                u8* code = outfp->codes + c * table->entrySize;
+                u8* code = table->codes + c * table->entrySize;
                 int i = 0;
                 while (outfp->count != 0) {
                     bfWrite((char) getIthBit(code, i), outfp);
@@ -348,10 +376,37 @@ void huffmanEncode(FILE* infp, BitFile* outfp, HuffTable* table) {
 }
 
 
-void huffmanDecode(BitFile* infp, FILE* outfp, HuffTree *tree) {
+void huffmanDecode(BitFile* infp, FILE* outfp, HuffNode *tree) {
 
-    // TODO: Write decode
-    
+    HuffNode* curr = tree;
+    int c;
+    while ((c = bfRead(infp)) != EOF) {
+        if (!c) {
+            curr = curr->left;
+        } else {
+            curr = curr->right;
+        }
+
+        if (!curr->left) {
+            ASSERT(!curr->right, "Huffman tree malformed in huffmanDecode. All nodes must have 0 or 2 children\n");
+            fputc((char) curr->sym, outfp);
+            curr = tree;
+        }
+    }
+}
+
+
+void countCharFreqs(FILE* infp, float* weights) {
+    int c;
+    for (int i=0; i < 256; i++) {
+        weights[i] = 0;
+    }
+    while ((c = fgetc(infp)) != EOF) {
+        weights[c] += 0.0001;
+    }
+
+    // Reset to start
+    fseek(infp, 0, SEEK_SET);
 }
 
 
@@ -863,43 +918,40 @@ int main(int argc, char* argv[]) {
         //printf("Testing file %s:\n", baseFile);
         //testCompression(baseFile, nTforms, compress, decompress);
         
+        infp = fopen("enwik9-sm", "rb");
+        float weights[256];
+        int syms[256];
+        rangeArr(256, syms);
 
-        //int n = 5;
-        //float weights[5] = {15.0, 7.0, 6.0, 6.0, 5.0};
-        //int syms[5] = {0, 1, 2, 3, 4};
-        //
-        //HuffNode* tree = buildHuffman(syms, weights, n);
-        //printHuffmanTree(tree, 0);
-        //HuffTable table;
-        //table.nSym = n; 
-        //extractHuffCodes(&table, tree);
-        //printHuffTable(&table);
+        countCharFreqs(infp, weights);
         
-        BitFile f1;
-        bfOpen(&f1, "test.b", "wb");
-        bfWrite(1, &f1);
-        bfWrite(0, &f1);
-        bfWrite(1, &f1);
-        bfWrite(1, &f1);
-        bfWrite(0, &f1);
-        bfWrite(0, &f1);
-        bfWrite(1, &f1);
-        bfWrite(0, &f1);
-        bfWrite(1, &f1);
-        bfWrite(0, &f1);
-        bfWrite(1, &f1);
-        bfWrite(1, &f1);
-        bfWrite(0, &f1);
-        bfWrite(0, &f1);
-        bfWrite(1, &f1);
-        bfWrite(0, &f1);
-        bfWriteClose(&f1);
+        HuffNode* hTree = buildHuffman(syms, weights, 256);
 
-        bfOpen(&f1, "test.b", "rb");
-        int c;
-        while ((c = bfRead(&f1)) != EOF) {
-            printf("%d\n", c);
-        }
+        HuffTable table;
+        table.nSym = 256;
+        
+        extractHuffCodes(&table, hTree);
+
+        printHuffTable(&table);
+
+        BitFile outbfp; 
+        bfOpen(&outbfp, "enwik9-sm-comp", "wb");
+
+        huffmanEncode(infp, &outbfp, &table);
+
+        bfWriteClose(&outbfp);
+        fclose(infp);
+
+        BitFile inbfp;
+        bfOpen(&inbfp, "enwik9-sm-comp", "rb");
+        outfp = fopen("enwik9-sm-decomp", "wb");
+
+        huffmanDecode(&inbfp, outfp, hTree);
+
+        bfReadClose(&inbfp);
+        fclose(outfp);
+        
+        
     }
 
     

@@ -6,3 +6,4 @@ build/*
 scores.txt
 src/.*
 .*
+*.txt
