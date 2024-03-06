@@ -196,6 +196,13 @@ HuffNode* buildHuffman(int* syms, float* weights, int nSym) {
     HuffNode* root = (HuffNode*) malloc(sizeof(HuffNode) * 2 * nSym - 1);
     HuffNode** orphans = (HuffNode**) malloc(sizeof(HuffNode*) * nSym);
 
+    for (int i=0; i < 2 * nSym - 1; i++) {
+        root[i].sym = 0;
+        root[i].weight = 0;
+        root[i].left = 0;
+        root[i].right = 0;
+    }
+
     for (int i=0; i < nSym; i++) {
         HuffNode* curr = root+nSym-1+i;
         // Symbols are unordered to start
@@ -266,7 +273,7 @@ void recursiveGenHuffCodes(HuffTable* res, HuffNode* tree, u8* currCode, int dep
 
 
 /*
- * Possible error in this or printHuffTable, check printHuffTable first
+ * TODO: Fix error in table building
  *
  */
 void extractHuffCodes(HuffTable* res, HuffNode* tree) {
@@ -277,6 +284,7 @@ void extractHuffCodes(HuffTable* res, HuffNode* tree) {
     // Allocate enough space (in bytes) for every symbol to fit the longest code
     res->entrySize = (maxLen + 7) / 8 * sizeof(u8);
     res->codes = (u8*) malloc(res->entrySize * res->nSym * sizeof(u8) + sizeof(int) * res->nSym);
+    
     res->codeLens = (int*) (res->codes + res->entrySize*res->nSym);
 
     // holder for current code
@@ -292,7 +300,7 @@ void extractHuffCodes(HuffTable* res, HuffNode* tree) {
 
 
 /*
- *  TODO: Fix error in table printing
+ *  
  *
  */
 void printHuffTable(HuffTable* table) {
@@ -314,7 +322,25 @@ void printHuffTable(HuffTable* table) {
 }
 
 
-void printHuffmanTree(HuffNode* root, int tabs) {
+void dumpHuffTable(HuffTable* table) {
+    // HuffTable: 
+    //  int nSym;
+    //  int entrySize;
+    //  u8* codes;
+    //  int* codeLens;
+    unsigned char* start = (unsigned char *) table;
+    unsigned char* end = start + 
+                         sizeof(int) + 
+                         sizeof(int) + 
+                         sizeof(u8) * table->nSym * table->entrySize +
+                         sizeof(int) * table->nSym;
+    while (start < end) {
+        printf("%x", *start++);
+    }
+}
+
+
+void printHuffTree(HuffNode* root, int tabs) {
     if (root != 0) {
         if (root->left == 0 && root->right == 0) {
             for (int i=0; i < tabs; i++) {
@@ -330,12 +356,12 @@ void printHuffmanTree(HuffNode* root, int tabs) {
                 printf("  ");
             }
             printf("Left:\n");
-            printHuffmanTree(root->left, tabs+1);
+            printHuffTree(root->left, tabs+1);
             for (int i=0; i < tabs; i++) {
                 printf("  ");
             }
             printf("Right:\n");
-            printHuffmanTree(root->right, tabs+1);
+            printHuffTree(root->right, tabs+1);
             printf("\n");
         }
     }
@@ -346,27 +372,29 @@ u8 getIthBit(u8 *bits, int i) {
     return *(bits+i/8) & (0x80 >> (i%8));
 }
 
-void huffmanEncode(FILE* infp, BitFile* outfp, HuffTable* table) {
+void huffmanEncode(FILE* infp, FILE* outfp, HuffTable* table) {
+    BitFile outbfp;
+    bfFromFilePtr(&outbfp, outfp);
     int c;
     while ((c = getc(infp)) != EOF) {
         int len = table->codeLens[c];    
         u8* code = table->codes + c * table->entrySize;
         for (int i=0; i < len; i++) {
             u8 nextBit = getIthBit(code, i);
-            bfWrite((char) nextBit, outfp);
+            bfWrite((char) nextBit, &outbfp);
         }
     }
-    if (outfp->count != 0) {
+    if (outbfp.count != 0) {
         // Bits needed to complete the byte
-        int needLen = 8 - outfp->count;
+        int needLen = 8 - outbfp.count;
         // Find code with prefix that would fill byte
         for (int c=0; c < table->nSym; c++) {
             int len = table->codeLens[c];    
             if (len > needLen) {
                 u8* code = table->codes + c * table->entrySize;
                 int i = 0;
-                while (outfp->count != 0) {
-                    bfWrite((char) getIthBit(code, i), outfp);
+                while (outbfp.count != 0) {
+                    bfWrite((char) getIthBit(code, i), &outbfp);
                     i++;
                 }
                 break;
@@ -376,11 +404,13 @@ void huffmanEncode(FILE* infp, BitFile* outfp, HuffTable* table) {
 }
 
 
-void huffmanDecode(BitFile* infp, FILE* outfp, HuffNode *tree) {
+void huffmanDecode(FILE* infp, FILE* outfp, HuffNode *tree) {
+    BitFile inbfp; 
+    bfFromFilePtr(&inbfp, infp);
 
     HuffNode* curr = tree;
     int c;
-    while ((c = bfRead(infp)) != EOF) {
+    while ((c = bfRead(&inbfp)) != EOF) {
         if (!c) {
             curr = curr->left;
         } else {
@@ -398,11 +428,22 @@ void huffmanDecode(BitFile* infp, FILE* outfp, HuffNode *tree) {
 
 void countCharFreqs(FILE* infp, float* weights) {
     int c;
+    uint64_t counts[256];
+    uint64_t max;
     for (int i=0; i < 256; i++) {
-        weights[i] = 0;
+        counts[i] = 0;
     }
     while ((c = fgetc(infp)) != EOF) {
-        weights[c] += 0.0001;
+        counts[c] += 1;
+    }
+    max = counts[0];
+    for (int i=1; i < 256; i++) {
+        if (counts[i] > max) {
+            max = counts[i];
+        }
+    }
+    for (int i=0; i < 256; i++) {
+        weights[i] = counts[i] / (float) max;
     }
 
     // Reset to start
@@ -926,30 +967,28 @@ int main(int argc, char* argv[]) {
         countCharFreqs(infp, weights);
         
         HuffNode* hTree = buildHuffman(syms, weights, 256);
-
+        //printHuffTree(hTree, 0);
         HuffTable table;
         table.nSym = 256;
         
         extractHuffCodes(&table, hTree);
 
-        printHuffTable(&table);
+        dumpHuffTable(&table);
 
-        BitFile outbfp; 
-        bfOpen(&outbfp, "enwik9-sm-comp", "wb");
+        outfp = fopen("enwik9-sm-comp", "wb");
 
-        huffmanEncode(infp, &outbfp, &table);
+        huffmanEncode(infp, outfp, &table);
 
-        bfWriteClose(&outbfp);
+        fclose(outfp);
         fclose(infp);
 
-        BitFile inbfp;
-        bfOpen(&inbfp, "enwik9-sm-comp", "rb");
+        infp = fopen("enwik9-sm-comp", "rb");
         outfp = fopen("enwik9-sm-decomp", "wb");
 
-        huffmanDecode(&inbfp, outfp, hTree);
+        huffmanDecode(infp, outfp, hTree);
 
-        bfReadClose(&inbfp);
         fclose(outfp);
+        fclose(infp);
         
         
     }
