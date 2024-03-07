@@ -258,7 +258,7 @@ void recursiveGenHuffCodes(HuffTable* res, HuffNode* tree, u8* currCode, int dep
         ASSERT(tree->left == tree->right, "Error: malformed tree. All nodes must be full or leaves.\n");
         int sym = tree->sym;
         for (int i=0; i <= depth/8; i++) {
-            res->codes[sym+i] = currCode[i];
+            res->codes[res->entrySize*sym+i] = currCode[i];
         }
         res->codeLens[sym] = depth;
     } else {
@@ -283,9 +283,15 @@ void extractHuffCodes(HuffTable* res, HuffNode* tree) {
 
     // Allocate enough space (in bytes) for every symbol to fit the longest code
     res->entrySize = (maxLen + 7) / 8 * sizeof(u8);
-    res->codes = (u8*) malloc(res->entrySize * res->nSym * sizeof(u8) + sizeof(int) * res->nSym);
+    res->codes = (u8*) malloc(res->entrySize * res->nSym * sizeof(u8));
+    for (int i=0; i < res->entrySize * res->nSym; i++) {
+        res->codes[i] = 0;
+    }
     
-    res->codeLens = (int*) (res->codes + res->entrySize*res->nSym);
+    res->codeLens = (int*) malloc(res->nSym * sizeof(int));
+    for (int i=0; i < res->nSym; i++) {
+        res->codeLens[i] = 0;
+    }
 
     // holder for current code
     u8* currCode = (u8*) malloc(res->entrySize);
@@ -328,14 +334,14 @@ void dumpHuffTable(HuffTable* table) {
     //  int entrySize;
     //  u8* codes;
     //  int* codeLens;
-    unsigned char* start = (unsigned char *) table;
-    unsigned char* end = start + 
-                         sizeof(int) + 
-                         sizeof(int) + 
-                         sizeof(u8) * table->nSym * table->entrySize +
-                         sizeof(int) * table->nSym;
-    while (start < end) {
-        printf("%x", *start++);
+    printf("%d\n", table->nSym);
+    printf("%d\n", table->entrySize);
+    for (int i=0; i < table->nSym; i++) {
+        printf("%d\n", table->codeLens[i]);
+        for (int j = 0; j < table->entrySize; j++) {
+            printf("%x ", table->codes[table->entrySize * i + j]);
+        }
+        printf("\n");
     }
 }
 
