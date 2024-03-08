@@ -13,6 +13,7 @@
 
 #define IMG_QUANT_FAC 16
 
+#define NUM_HUFF_SYMS 256
 
 /*
  *  Compression Ratios:
@@ -119,8 +120,32 @@ int readLittleEndian(FILE *fp, int offset, int nBytes) {
         res |= (c << (8*i));
     }
     return res;
-    
 }
+
+
+void writeInt32(FILE *fp, int toWrite) {
+    ASSERT(sizeof(int) == 4, "Error: Program assumes 'int' type is a 32 bit integer. The program needs refactoring if this is not the case\n");
+    // Note little endian
+    fputc((char) toWrite & 0xFF, fp);
+    fputc((char) (toWrite >> 8) & 0xFF, fp);
+    fputc((char) (toWrite >> 16) & 0xFF, fp);
+    fputc((char) (toWrite >> 24) & 0xFF, fp);
+
+}
+
+
+int readInt32(FILE *fp) {
+    ASSERT(sizeof(int) == 4, "Error: Program assumes 'int' type is a 32 bit integer. The program needs refactoring if this is not the case\n");
+    int res = 0;
+    int c;
+    // Note: little endian
+    for (int i=0; i < 4 && (c = fgetc(fp)) != EOF; i++) {
+        res |= (c << 8*i);
+    }
+    ASSERT(c != EOF, "Error: End of file reached while reading int");
+    return res;
+}
+
 
 void readBMPHeader(FILE *fp, BMPFileHeader *h) {
     h->size = readLittleEndian(fp, 2, 4);
@@ -149,22 +174,22 @@ void copyRemaining(FILE* infp, FILE* outfp) {
 }
 
 
-typedef struct HuffNode{
+typedef struct {
     int sym;
     float weight;
     struct HuffNode *left;
     struct HuffNode *right;
-} HuffNode;
+} HuffNode1;
 
 
+/* TODO delete once huffman refactor done
 
-
-/*
+*
  *
  * NOTE: THIS METHOD ASSUMES YOU HAVE AT LEAST n+1 MEMORY ALLOCATED FOR THE SORTED
  *       NODES AND DON'T CARE WHAT HAPPENS TO THE VALUE STORED AT INDEX n.
  *
- */
+ *
 void insertIntoHuffNodes(HuffNode** sortedNodes, int n, HuffNode* node) {
     if (n == 0) {
         sortedNodes[0] = node;
@@ -272,10 +297,6 @@ void recursiveGenHuffCodes(HuffTable* res, HuffNode* tree, u8* currCode, int dep
 }
 
 
-/*
- * TODO: Fix error in table building
- *
- */
 void extractHuffCodes(HuffTable* res, HuffNode* tree) {
     ASSERT(res->nSym, "Need to set HuffTable nSym before calling extractHuffCodes\n");
     // Max length in bits
@@ -305,10 +326,10 @@ void extractHuffCodes(HuffTable* res, HuffNode* tree) {
 }
 
 
-/*
+*
  *  
  *
- */
+ *
 void printHuffTable(HuffTable* table) {
     printf("Huff table:\n");
     printf("Num entries: %d\n", table->nSym);
@@ -378,7 +399,19 @@ u8 getIthBit(u8 *bits, int i) {
     return *(bits+i/8) & (0x80 >> (i%8));
 }
 
-void huffmanEncode(FILE* infp, FILE* outfp, HuffTable* table) {
+void huffmanEncodeWithTable(FILE* infp, FILE* outfp, HuffTable* table) {
+
+    // Write huffman table
+    writeInt32(outfp, table->nSym);
+    writeInt32(outfp, table->entrySize);
+    for (int i=0; i < table->nSym; i++) {
+        writeInt32(outfp, table->codeLens[i]);
+    }
+    for (int i=0; i < table->nSym * table->entrySize; i++) {
+        putc((char) table->codes[i], outfp);
+    }
+
+
     BitFile outbfp;
     bfFromFilePtr(&outbfp, outfp);
     int c;
@@ -411,6 +444,7 @@ void huffmanEncode(FILE* infp, FILE* outfp, HuffTable* table) {
 
 
 void huffmanDecode(FILE* infp, FILE* outfp, HuffNode *tree) {
+
     BitFile inbfp; 
     bfFromFilePtr(&inbfp, infp);
 
@@ -430,7 +464,77 @@ void huffmanDecode(FILE* infp, FILE* outfp, HuffNode *tree) {
         }
     }
 }
+*/
 
+typedef struct HuffNode {
+    union {
+        int left;
+        // Reuse space of left child to hold symbol when node is a leaf
+        int sym;
+    };
+    union {
+        int right;
+        // Since no node points to the 0 node and all nodes have 2 or 0 children, we
+        // can reuse right child space to decide if parent.
+        int isParent; 
+    };
+} HuffNode;
+
+
+typedef struct HuffTree {
+    // Know we need 2n - 1 nodes for a tree with n leaves and no half-filled nodes
+    HuffNode nodes[NUM_HUFF_SYMS * 2 - 1];
+    float weights[NUM_HUFF_SYMS * 2 - 1];
+} HuffTree;
+
+
+void buildHuffman(HuffTree* tree, int *syms, float* symWeights) {
+    int nOrphans = NUM_HUFF_SYMS;
+    int orphans[NUM_HUFF_SYMS];
+    HuffNode* nodes = tree->nodes;
+    float* weights = tree->weights;
+    for (int i=0; i < NUM_HUFF_SYMS; i++) {
+        orphans[i] = NUM_HUFF_SYMS+i-1;
+        nodes[NUM_HUFF_SYMS + i - 1].sym = syms[i];
+        nodes[NUM_HUFF_SYMS + i - 1].isParent = 0;
+        weights[NUM_HUFF_SYMS + i - 1] = symWeights[i];
+    }
+
+    for (int i=NUM_HUFF_SYMS-2; i >= 0; i--) {
+        int small1, small2;
+        small1 = orphans[0];
+        small2 = orphans[1];
+        if (weights[small1] > weights[small2]) {
+            small1 = small2;
+            small2 = orphans[0];
+        }
+
+        // Get lowest 2 nodes in remaining orphans
+        for (int j=2; j < nOrphans; j++) {
+            int curr = orphans[j];
+            if (weights[curr] < weights[small1]) {
+                small2 = small1;
+                small1 = curr;
+            } else if (weights[curr] < weights[small2]) {
+                small2 = curr;
+            }
+        }
+
+        // Make this node point to two lowest
+        nodes[i].left = small1;
+        nodes[i].right = small2;
+        weights[i] = weights[small1] + weights[small2];
+        int k=0;
+        for (int j=0; j < nOrphans; j++) {
+            if (orphans[j] != small1 && orphans[j] != small2) {
+                orphans[k++] = orphans[j];
+            }
+        }
+        // Decrement nOrphans and set last orphan to most recent node
+        orphans[--nOrphans - 1] = i;
+    }
+
+}
 
 void countCharFreqs(FILE* infp, float* weights) {
     int c;
@@ -887,10 +991,9 @@ void testCompression(char *baseFile, int nTforms, TformPtr* compress, TformPtr* 
 
 
 
-
 int main(int argc, char* argv[]) {
-    TformPtr compress[1] = {imgQuantTransform};
-    TformPtr decompress[1] = {invImgQuantTransform};
+    TformPtr compress[1] = {0};
+    TformPtr decompress[1] = {0};
     int nTforms = 1;
 
     FILE *infp; 
@@ -965,36 +1068,88 @@ int main(int argc, char* argv[]) {
         //printf("Testing file %s:\n", baseFile);
         //testCompression(baseFile, nTforms, compress, decompress);
         
-        infp = fopen("enwik9-sm", "rb");
-        float weights[256];
-        int syms[256];
-        rangeArr(256, syms);
+        //infp = fopen("enwik9-sm", "rb");
+        //float weights[256];
+        //int syms[256];
+        //rangeArr(256, syms);
 
-        countCharFreqs(infp, weights);
+        //countCharFreqs(infp, weights);
+        //
+        //HuffNode* hTree = buildHuffman(syms, weights, 256);
+        ////printHuffTree(hTree, 0);
+        //HuffTable table;
+        //table.nSym = 256;
+        //
+        //extractHuffCodes(&table, hTree);
+
+        //outfp = fopen("enwik9-sm-comp", "wb");
+
+        //huffmanEncodeWithTable(infp, outfp, &table);
+
+        //fclose(outfp);
+        //fclose(infp);
+
+        //infp = fopen("enwik9-sm-comp", "rb");
+        //outfp = fopen("enwik9-sm-decomp", "wb");
+
+        //huffmanDecode(infp, outfp, hTree);
+
+        //fclose(outfp);
+        //fclose(infp);
+    
         
-        HuffNode* hTree = buildHuffman(syms, weights, 256);
-        //printHuffTree(hTree, 0);
-        HuffTable table;
-        table.nSym = 256;
+        //int nSym = 7;
+        //int syms[7] =          {'a', 'b',  'c',  'd', 'e',  'f',  'g'};
+        //float baseWeights[7] = {0.1, 0.5, 0.025, 0.1, 0.2, 0.05, 0.025};
+
+        //int nOrphans = 7;
+        //int orphans[7];
+        //HNode nodes[2*7-1];
+        //float weights[2*7-1];
+        //for (int i=0; i < 7; i++) {
+        //    orphans[i] = 7+i-1;
+        //    nodes[7 + i - 1].sym = syms[i];
+        //    nodes[7 + i - 1].right = 0;
+        //    weights[7 + i - 1] = baseWeights[i];
+        //}
+
+        //for (int i=7-2; i >= 0; i--) {
+        //    int small1, small2;
+        //    small1 = orphans[0];
+        //    small2 = orphans[1];
+        //    if (weights[small1] > weights[small2]) {
+        //        small1 = small2;
+        //        small2 = orphans[0];
+        //    }
+
+        //    // Get lowest 2 nodes in remaining orphans
+        //    for (int j=2; j < nOrphans; j++) {
+        //        int curr = orphans[j];
+        //        if (weights[curr] < weights[small1]) {
+        //            small2 = small1;
+        //            small1 = curr;
+        //        } else if (weights[curr] < weights[small2]) {
+        //            small2 = curr;
+        //        }
+        //    }
+
+        //    // Make this node point to two lowest
+        //    nodes[i].left = small1;
+        //    nodes[i].right = small2;
+        //    weights[i] = weights[small1] + weights[small2];
+        //    int k=0;
+        //    for (int j=0; j < nOrphans; j++) {
+        //        if (orphans[j] != small1 && orphans[j] != small2) {
+        //            orphans[k++] = orphans[j];
+        //        }
+        //    }
+        //    // Decrement nOrphans and set last orphan to most recent node
+        //    orphans[--nOrphans - 1] = i;
+        //}
+
+        int x = 0;
         
-        extractHuffCodes(&table, hTree);
-
-        dumpHuffTable(&table);
-
-        outfp = fopen("enwik9-sm-comp", "wb");
-
-        huffmanEncode(infp, outfp, &table);
-
-        fclose(outfp);
-        fclose(infp);
-
-        infp = fopen("enwik9-sm-comp", "rb");
-        outfp = fopen("enwik9-sm-decomp", "wb");
-
-        huffmanDecode(infp, outfp, hTree);
-
-        fclose(outfp);
-        fclose(infp);
+        
         
         
     }
