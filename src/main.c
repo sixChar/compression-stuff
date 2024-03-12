@@ -13,7 +13,9 @@
 
 #define IMG_QUANT_FAC 16
 
-#define NUM_HUFF_SYMS 256
+#define NUM_HUFF_SYMS 7
+// Know we need 2n - 1 nodes for a tree with n leaves and no half-filled nodes
+#define NUM_HUFF_NODES (NUM_HUFF_SYMS * 2 - 1)
 
 /*
  *  Compression Ratios:
@@ -482,17 +484,27 @@ typedef struct HuffNode {
 
 
 typedef struct HuffTree {
-    // Know we need 2n - 1 nodes for a tree with n leaves and no half-filled nodes
-    HuffNode nodes[NUM_HUFF_SYMS * 2 - 1];
-    float weights[NUM_HUFF_SYMS * 2 - 1];
+    HuffNode nodes[NUM_HUFF_NODES];
+    float weights[NUM_HUFF_NODES];
 } HuffTree;
 
 
-void buildHuffman(HuffTree* tree, int *syms, float* symWeights) {
+typedef struct HuffTable {
+    int codeLens[NUM_HUFF_SYMS];
+    // N^2 Memory b/c this should provide more than enough and static memory makes the
+    // code simpler.
+    u8 codes[NUM_HUFF_SYMS * NUM_HUFF_SYMS];
+} HuffTable;
+
+#define HUFF_ENTRY_SIZE (NUM_HUFF_SYMS * NUM_HUFF_SYMS)
+
+
+void buildHuffTree(HuffTree* tree, int *syms, float* symWeights) {
     int nOrphans = NUM_HUFF_SYMS;
     int orphans[NUM_HUFF_SYMS];
     HuffNode* nodes = tree->nodes;
     float* weights = tree->weights;
+    // Initialize leaf nodes
     for (int i=0; i < NUM_HUFF_SYMS; i++) {
         orphans[i] = NUM_HUFF_SYMS+i-1;
         nodes[NUM_HUFF_SYMS + i - 1].sym = syms[i];
@@ -500,6 +512,7 @@ void buildHuffman(HuffTree* tree, int *syms, float* symWeights) {
         weights[NUM_HUFF_SYMS + i - 1] = symWeights[i];
     }
 
+    // Build parent nodes
     for (int i=NUM_HUFF_SYMS-2; i >= 0; i--) {
         int small1, small2;
         small1 = orphans[0];
@@ -533,8 +546,71 @@ void buildHuffman(HuffTree* tree, int *syms, float* symWeights) {
         // Decrement nOrphans and set last orphan to most recent node
         orphans[--nOrphans - 1] = i;
     }
+}
+
+
+void extractHuffCodes(HuffTable* res, HuffTree* tree) {
+    int lengths[NUM_HUFF_NODES];
+    lengths[0] = 0;
+    int maxLen = 0;
+    for (int i=0; i < NUM_HUFF_NODES; i++) {
+        HuffNode curr = tree->nodes[i];
+        if (curr.isParent) {
+            lengths[curr.left] = lengths[i] + 1;
+            lengths[curr.right] = lengths[i] + 1;
+            if (lengths[i] + 1 > maxLen) {
+                maxLen = lengths[i] + 1;
+            } 
+        } else {
+            res->codeLens[i-NUM_HUFF_SYMS+1] = lengths[i];
+        }
+    }
+    ASSERT(((maxLen+7)/8) < NUM_HUFF_SYMS, "Error: Code was written expecting maximum code length (in bytes) to be less than the total number of symbols.\n");
+
+    u8 tempCodes[NUM_HUFF_NODES * NUM_HUFF_SYMS];
+
+    for (int i=0; i < NUM_HUFF_NODES; i++) {
+        HuffNode curr = tree->nodes[i];
+        int byt;
+        // Copy this code to it's children
+        for (byt=0; byt < (lengths[i]+7) / 8; byt++) {
+            tempCodes[curr.left*NUM_HUFF_SYMS + byt] = tempCodes[i*NUM_HUFF_SYMS+byt];
+            tempCodes[curr.right*NUM_HUFF_SYMS + byt] = tempCodes[i*NUM_HUFF_SYMS+byt];
+        }
+
+        // Current bit to set is 1 after this code's length
+        int bitIdx = lengths[i];
+        // Left is set off at that bit
+        tempCodes[curr.left*NUM_HUFF_SYMS + (bitIdx / 8)] &= ((u8) ~(0x80 >> (bitIdx%8)));
+        // Right is set on at that bit
+        tempCodes[curr.right*NUM_HUFF_SYMS + (bitIdx / 8)] |= ((u8) (0x80 >> (bitIdx%8)));
+    }
+
+    for (int i=0; i < NUM_HUFF_SYMS * NUM_HUFF_SYMS; i++) {
+        // Copy over codes for the leaf nodes
+        res->codes[i] = tempCodes[i + (NUM_HUFF_SYMS-1) * NUM_HUFF_SYMS];
+    }
+
 
 }
+
+
+void printHuffTable(HuffTable *table) {
+    for (int i=0; i < NUM_HUFF_SYMS; i++) {
+        printf("Symbol index: %d\n", i);
+        int length = table->codeLens[i];
+        printf("  Len: %d\n", length);
+        printf("  Code: ");
+        for (int j=0; j < length; j++) {
+            int bit = table->codes[i*NUM_HUFF_SYMS + (j/8)] & (0x80 >> j % 8);
+            printf("%d", bit != 0);
+        }
+        printf("\n");
+        
+    }
+}
+
+
 
 void countCharFreqs(FILE* infp, float* weights) {
     int c;
@@ -1098,54 +1174,18 @@ int main(int argc, char* argv[]) {
         //fclose(infp);
     
         
-        //int nSym = 7;
-        //int syms[7] =          {'a', 'b',  'c',  'd', 'e',  'f',  'g'};
-        //float baseWeights[7] = {0.1, 0.5, 0.025, 0.1, 0.2, 0.05, 0.025};
+        int syms[7] =          {'a', 'b',  'c',  'd', 'e',  'f',  'g'};
+        float baseWeights[7] = {0.1, 0.5, 0.025, 0.1, 0.2, 0.05, 0.025};
 
-        //int nOrphans = 7;
-        //int orphans[7];
-        //HNode nodes[2*7-1];
-        //float weights[2*7-1];
-        //for (int i=0; i < 7; i++) {
-        //    orphans[i] = 7+i-1;
-        //    nodes[7 + i - 1].sym = syms[i];
-        //    nodes[7 + i - 1].right = 0;
-        //    weights[7 + i - 1] = baseWeights[i];
-        //}
+        HuffTree tree;
 
-        //for (int i=7-2; i >= 0; i--) {
-        //    int small1, small2;
-        //    small1 = orphans[0];
-        //    small2 = orphans[1];
-        //    if (weights[small1] > weights[small2]) {
-        //        small1 = small2;
-        //        small2 = orphans[0];
-        //    }
+        buildHuffTree(&tree, syms, baseWeights);
 
-        //    // Get lowest 2 nodes in remaining orphans
-        //    for (int j=2; j < nOrphans; j++) {
-        //        int curr = orphans[j];
-        //        if (weights[curr] < weights[small1]) {
-        //            small2 = small1;
-        //            small1 = curr;
-        //        } else if (weights[curr] < weights[small2]) {
-        //            small2 = curr;
-        //        }
-        //    }
+        HuffTable table;
+        extractHuffCodes(&table, &tree);
 
-        //    // Make this node point to two lowest
-        //    nodes[i].left = small1;
-        //    nodes[i].right = small2;
-        //    weights[i] = weights[small1] + weights[small2];
-        //    int k=0;
-        //    for (int j=0; j < nOrphans; j++) {
-        //        if (orphans[j] != small1 && orphans[j] != small2) {
-        //            orphans[k++] = orphans[j];
-        //        }
-        //    }
-        //    // Decrement nOrphans and set last orphan to most recent node
-        //    orphans[--nOrphans - 1] = i;
-        //}
+        printHuffTable(&table);
+
 
         int x = 0;
         
