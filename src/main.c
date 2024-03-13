@@ -13,7 +13,7 @@
 
 #define IMG_QUANT_FAC 16
 
-#define NUM_HUFF_SYMS 7
+#define NUM_HUFF_SYMS 256
 // Know we need 2n - 1 nodes for a tree with n leaves and no half-filled nodes
 #define NUM_HUFF_NODES (NUM_HUFF_SYMS * 2 - 1)
 
@@ -88,6 +88,9 @@ void bfFromFilePtr(BitFile* bfp, FILE* fp) {
 }
 
 
+u8 getIthBit(u8 *bits, int i) {
+    return *(bits+i/8) & (0x80 >> (i%8));
+}
 
 
 typedef void (*TformPtr)(FILE*, FILE*);
@@ -176,156 +179,8 @@ void copyRemaining(FILE* infp, FILE* outfp) {
 }
 
 
-typedef struct {
-    int sym;
-    float weight;
-    struct HuffNode *left;
-    struct HuffNode *right;
-} HuffNode1;
-
-
 /* TODO delete once huffman refactor done
 
-*
- *
- * NOTE: THIS METHOD ASSUMES YOU HAVE AT LEAST n+1 MEMORY ALLOCATED FOR THE SORTED
- *       NODES AND DON'T CARE WHAT HAPPENS TO THE VALUE STORED AT INDEX n.
- *
- *
-void insertIntoHuffNodes(HuffNode** sortedNodes, int n, HuffNode* node) {
-    if (n == 0) {
-        sortedNodes[0] = node;
-    }
-    for (int i=n-1; i >= 0; i--) {
-        if (sortedNodes[i]->weight >= node->weight) {
-            sortedNodes[i+1] = node;
-            break;
-        } else if (i > 0) {
-            sortedNodes[i+1] = sortedNodes[i];
-        } else {
-            sortedNodes[i+1] = sortedNodes[i];
-            sortedNodes[0] = node;
-        }
-    }
-}
-
-
-void sortHuffNodes(HuffNode** nodes, int n) {
-    for (int i=1; i < n; i++) {
-        insertIntoHuffNodes(nodes, i, nodes[i]);
-    }
-}
-
-
-HuffNode* buildHuffman(int* syms, float* weights, int nSym) {
-    // Since every non-leaf node has 2 children there will be 2n-1 total nodes
-    // with n being the number of leaves (symbols)
-    HuffNode* root = (HuffNode*) malloc(sizeof(HuffNode) * 2 * nSym - 1);
-    HuffNode** orphans = (HuffNode**) malloc(sizeof(HuffNode*) * nSym);
-
-    for (int i=0; i < 2 * nSym - 1; i++) {
-        root[i].sym = 0;
-        root[i].weight = 0;
-        root[i].left = 0;
-        root[i].right = 0;
-    }
-
-    for (int i=0; i < nSym; i++) {
-        HuffNode* curr = root+nSym-1+i;
-        // Symbols are unordered to start
-        *(orphans+i) = curr;
-        curr->sym = syms[i];
-        curr->weight = weights[i];
-        curr->left = 0;
-        curr->right = 0;
-    }
-
-    int nOrphans = nSym;
-    sortHuffNodes(orphans, nOrphans);
-
-    for (; nOrphans > 1; nOrphans--) {
-        HuffNode* curr = (root + nOrphans-2);
-        curr->left = orphans[nOrphans-2];
-        curr->right = orphans[nOrphans-1];
-        curr->weight = curr->left->weight + curr->right->weight;
-        insertIntoHuffNodes(orphans, nOrphans-2, curr);
-    }
-
-    free(orphans);
-    return root;
-}
-
-
-typedef struct HuffTable {
-    int nSym;
-    int entrySize;
-    u8* codes;
-    int* codeLens;
-} HuffTable;
-
-
-int findMaxHuffLength(HuffNode* tree) {
-    if (tree == NULL) {
-        return 0;
-    }
-
-    int leftL = findMaxHuffLength(tree->left);
-    int rightL = findMaxHuffLength(tree->right);
-    if (leftL > rightL) {
-        return leftL+1;
-    } else {
-        return rightL+1;
-    }
-}
-
-
-
-void recursiveGenHuffCodes(HuffTable* res, HuffNode* tree, u8* currCode, int depth) {
-    if (tree->left == NULL || tree->right == NULL) {
-        ASSERT(tree->left == tree->right, "Error: malformed tree. All nodes must be full or leaves.\n");
-        int sym = tree->sym;
-        for (int i=0; i <= depth/8; i++) {
-            res->codes[res->entrySize*sym+i] = currCode[i];
-        }
-        res->codeLens[sym] = depth;
-    } else {
-        // Set current bit to 1
-        currCode[depth/8] |= 0x80 >> (depth % 8);
-        recursiveGenHuffCodes(res, tree->right, currCode, depth+1);
-        // Set current bit to 0
-        currCode[depth/8] &= ~(0x80 >> (depth % 8));
-        recursiveGenHuffCodes(res, tree->left, currCode, depth+1);
-    }
-}
-
-
-void extractHuffCodes(HuffTable* res, HuffNode* tree) {
-    ASSERT(res->nSym, "Need to set HuffTable nSym before calling extractHuffCodes\n");
-    // Max length in bits
-    int maxLen = findMaxHuffLength(tree);
-
-    // Allocate enough space (in bytes) for every symbol to fit the longest code
-    res->entrySize = (maxLen + 7) / 8 * sizeof(u8);
-    res->codes = (u8*) malloc(res->entrySize * res->nSym * sizeof(u8));
-    for (int i=0; i < res->entrySize * res->nSym; i++) {
-        res->codes[i] = 0;
-    }
-    
-    res->codeLens = (int*) malloc(res->nSym * sizeof(int));
-    for (int i=0; i < res->nSym; i++) {
-        res->codeLens[i] = 0;
-    }
-
-    // holder for current code
-    u8* currCode = (u8*) malloc(res->entrySize);
-    for (int i=0; i < res->entrySize; i++) {
-        currCode[i] = 0;
-    }
-
-    recursiveGenHuffCodes(res, tree, currCode, 0);
-
-    free(currCode);
-}
 
 
 *
@@ -397,9 +252,6 @@ void printHuffTree(HuffNode* root, int tabs) {
 }
 
 
-u8 getIthBit(u8 *bits, int i) {
-    return *(bits+i/8) & (0x80 >> (i%8));
-}
 
 void huffmanEncodeWithTable(FILE* infp, FILE* outfp, HuffTable* table) {
 
@@ -491,12 +343,11 @@ typedef struct HuffTree {
 
 typedef struct HuffTable {
     int codeLens[NUM_HUFF_SYMS];
-    // N^2 Memory b/c this should provide more than enough and static memory makes the
-    // code simpler.
+    // Shouldn't be possible to have a proper tree with more than num syms bits for a
+    // particular symbol
     u8 codes[NUM_HUFF_SYMS * NUM_HUFF_SYMS];
 } HuffTable;
 
-#define HUFF_ENTRY_SIZE (NUM_HUFF_SYMS * NUM_HUFF_SYMS)
 
 
 void buildHuffTree(HuffTree* tree, int *syms, float* symWeights) {
@@ -607,6 +458,64 @@ void printHuffTable(HuffTable *table) {
         }
         printf("\n");
         
+    }
+}
+
+
+void huffmanEncodeWithTree(FILE* infp, FILE* outfp, HuffTree* tree) {
+    HuffTable table;
+    extractHuffCodes(&table, tree);
+
+    BitFile outbfp;
+    bfFromFilePtr(&outbfp, outfp);
+
+    int c;
+    while ((c = getc(infp)) != EOF) {
+        int len = table.codeLens[c];    
+        u8* code = table.codes + c * NUM_HUFF_SYMS;
+        for (int i=0; i < len; i++) {
+            u8 nextBit = getIthBit(code, i);
+            bfWrite((char) nextBit, &outbfp);
+        }
+    }
+    if (outbfp.count != 0) {
+        // Bits needed to complete the byte
+        int needLen = 8 - outbfp.count;
+        // Find code with prefix that would fill byte
+        for (int c=0; c < NUM_HUFF_SYMS; c++) {
+            int len = table.codeLens[c];    
+            if (len > needLen) {
+                u8* code = table.codes + c * NUM_HUFF_SYMS;
+                int i = 0;
+                while (outbfp.count != 0) {
+                    bfWrite((char) getIthBit(code, i), &outbfp);
+                    i++;
+                }
+                break;
+            }
+        }
+    }
+    
+}
+
+
+void huffmanDecodeWithTree(FILE* infp, FILE* outfp, HuffTree* tree) {
+    BitFile inbfp; 
+    bfFromFilePtr(&inbfp, infp);
+
+    HuffNode* curr = tree->nodes;
+    int c;
+    while ((c = bfRead(&inbfp)) != EOF) {
+        if (!c) {
+            curr = &tree->nodes[curr->left];
+        } else {
+            curr = &tree->nodes[curr->right];
+        }
+
+        if (!curr->isParent) {
+            fputc((char) curr->sym, outfp);
+            curr = tree->nodes;
+        }
     }
 }
 
@@ -1074,7 +983,7 @@ int main(int argc, char* argv[]) {
 
     FILE *infp; 
     FILE *outfp;
-    char *baseFile = "image.bmp";
+    char *baseFile = "";
     char fname[1024];
     if (argc == 2 && *argv[1] == 'c') {
         printf("Compressing...\n");
@@ -1141,57 +1050,32 @@ int main(int argc, char* argv[]) {
         fclose(outfp);
     }
     else {
-        //printf("Testing file %s:\n", baseFile);
-        //testCompression(baseFile, nTforms, compress, decompress);
         
-        //infp = fopen("enwik9-sm", "rb");
-        //float weights[256];
-        //int syms[256];
-        //rangeArr(256, syms);
+        infp = fopen("enwik9-sm", "rb");
+        float weights[256];
+        int syms[256];
+        rangeArr(256, syms);
 
-        //countCharFreqs(infp, weights);
-        //
-        //HuffNode* hTree = buildHuffman(syms, weights, 256);
-        ////printHuffTree(hTree, 0);
-        //HuffTable table;
-        //table.nSym = 256;
-        //
-        //extractHuffCodes(&table, hTree);
-
-        //outfp = fopen("enwik9-sm-comp", "wb");
-
-        //huffmanEncodeWithTable(infp, outfp, &table);
-
-        //fclose(outfp);
-        //fclose(infp);
-
-        //infp = fopen("enwik9-sm-comp", "rb");
-        //outfp = fopen("enwik9-sm-decomp", "wb");
-
-        //huffmanDecode(infp, outfp, hTree);
-
-        //fclose(outfp);
-        //fclose(infp);
-    
+        countCharFreqs(infp, weights);
         
-        int syms[7] =          {'a', 'b',  'c',  'd', 'e',  'f',  'g'};
-        float baseWeights[7] = {0.1, 0.5, 0.025, 0.1, 0.2, 0.05, 0.025};
-
-        HuffTree tree;
-
-        buildHuffTree(&tree, syms, baseWeights);
-
-        HuffTable table;
-        extractHuffCodes(&table, &tree);
-
-        printHuffTable(&table);
-
-
-        int x = 0;
+        HuffTree hTree;
+        buildHuffTree(&hTree, syms, weights);
         
-        
-        
-        
+        outfp = fopen("enwik9-sm-comp", "wb");
+
+        huffmanEncodeWithTree(infp, outfp, &hTree);
+
+        fclose(outfp);
+        fclose(infp);
+
+        infp = fopen("enwik9-sm-comp", "rb");
+        outfp = fopen("enwik9-sm-decomp", "wb");
+
+        huffmanDecodeWithTree(infp, outfp, &hTree);
+
+        fclose(outfp);
+        fclose(infp);
+
     }
 
     
